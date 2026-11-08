@@ -25,6 +25,10 @@ header::after{content:'';position:absolute;left:0;bottom:-1px;width:100%;height:
 .sample-actions{display:flex;gap:6px;flex-shrink:0}.sample-actions .btn{padding-inline:10px;white-space:nowrap}
 .header-actions{display:flex;gap:8px;margin-left:auto;flex-wrap:wrap;align-items:center}
 .header-actions .btn{white-space:nowrap}
+.lang-pick{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--sub);white-space:nowrap}
+.lang-pick select{min-height:30px;border-radius:8px;padding:4px 8px;font-size:11px;background:#1c1c1f;border:1px solid var(--line);color:var(--txt);cursor:pointer}
+.lang-pick select:hover{border-color:var(--acc);color:var(--acc2)}
+.lang-pick select:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
 .btn-group{display:flex}.btn-group .btn:first-child{border-radius:8px 0 0 8px}.btn-group .btn:last-child{border-radius:0 8px 8px 0;margin-left:-1px}
 .obs-chip{font-size:11px;padding:5px 10px;border-radius:20px;border:1px solid #3d5a49;background:#15241b;color:var(--ok);cursor:pointer;white-space:nowrap}
 .obs-chip.off{border-color:var(--line-soft);background:#18171b;color:var(--muted)}
