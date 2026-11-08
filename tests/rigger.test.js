@@ -110,3 +110,64 @@ assert.ok(mystery.unknown && mystery.group === 'body');
 assert.strictEqual(Rigger.roleLabel('front hair'), '前髪');
 
 console.log('rigger tests: 20 scenarios passed');
+
+// ---- face-part stacking order (see-through can emit eyewhite above irides, eyebrow under face) ----
+{
+  // one layer holding both eyes (two blocks, gap at the face centre), as see-through emits them
+  function pair(name, top, h, w) {
+    w = w || 40;
+    const L = solidLayer(name, 100, top, 100, h), d = L.imageData.data;
+    for (let y = 0; y < h; y++) for (let x = w; x < 100 - w; x++) d[(y * 100 + x) * 4 + 3] = 0;
+    return L;
+  }
+  const names = rig => rig.layers.map(l => l.name);
+  const idx = (rig, n) => names(rig).indexOf(n);
+  const bad = Rigger.buildRig({ width: 300, height: 300, children: [
+    solidLayer('back hair', 60, 10, 180, 200),
+    pair('eyebrow', 55, 8),          // under the face: would be hidden
+    solidLayer('face', 80, 30, 140, 130),
+    pair('irides', 76, 10, 30),
+    pair('eyelash', 70, 8),
+    pair('eyewhite', 74, 14),       // above irides AND eyelash
+    solidLayer('mouth', 135, 125, 30, 10),
+    solidLayer('front hair', 70, 20, 160, 50)
+  ] });
+  for (const s of ['l', 'r']) {
+    assert.ok(idx(bad, 'face') < idx(bad, 'eyebrow_' + s), 'eyebrow must be drawn above the face');
+    assert.ok(idx(bad, 'eyewhite_' + s) < idx(bad, 'irides_' + s), 'eyewhite must be under the irides');
+    assert.ok(idx(bad, 'eyewhite_' + s) < idx(bad, 'eyelash_' + s), 'eyewhite must be under the eyelash');
+  }
+  assert.ok(idx(bad, 'front hair') === bad.layers.length - 1 || idx(bad, 'front hair') > idx(bad, 'eyelash_r'), 'bangs stay on top');
+  assert.ok(bad.warnings.some(w => /重なり順/.test(w)), 'reordering is reported');
+  // a correct PSD is left exactly as painted
+  const good = Rigger.buildRig({ width: 300, height: 300, children: [
+    solidLayer('face', 80, 30, 140, 130), pair('eyewhite', 74, 14), pair('irides', 76, 10, 30),
+    pair('eyelash', 70, 8), pair('eyebrow', 55, 8), solidLayer('front hair', 70, 20, 160, 50)
+  ] });
+  assert.ok(!good.warnings.some(w => /重なり順/.test(w)), 'nothing to fix → no reorder');
+
+  // no eyewhite: eyes still get anchors (and therefore a closed eye)
+  const GP = require('../lib/genericparts.js');
+  const noWhite = Rigger.buildRig({ width: 300, height: 300, children: [
+    solidLayer('face', 80, 30, 140, 130), pair('irides', 76, 10, 30), pair('eyelash', 70, 8)
+  ] }, { generic: { eyeL: GP.get('eyeL'), eyeR: GP.get('eyeR') } });
+  assert.ok(noWhite.anchors.eyeL && noWhite.anchors.eyeR, 'irides/eyelash give the eye anchors when eyewhite is missing');
+  assert.ok(noWhite.layers.some(l => l.fade === 'eyeClose' && l.side === 'L') && noWhite.layers.some(l => l.fade === 'eyeClose' && l.side === 'R'), 'closed eyes are synthesized without eyewhite');
+
+  // a light brow blob fused on top of the lash line is moved out of the eyelash layer
+  const lash = solidLayer('eyelash', 98, 60, 104, 30);
+  const d = lash.imageData.data;
+  for (let y = 0; y < 30; y++) for (let x = 0; x < 104; x++) {
+    const q = (y * 104 + x) * 4, inEye = x < 40 || x > 64;
+    const ink = y >= 12 && y < 16 && inEye;                       // lash line at the eyewhite top
+    const blob = y >= 2 && y < 12 && ((x >= 8 && x < 30) || (x >= 74 && x < 96)); // thick light blob above, touching it
+    d[q] = d[q + 1] = d[q + 2] = ink ? 20 : 190; d[q + 3] = ink || blob ? 255 : 0;
+  }
+  const brow = Rigger.buildRig({ width: 300, height: 300, children: [
+    solidLayer('face', 80, 30, 140, 130), pair('eyewhite', 72, 16), pair('irides', 74, 12, 30), lash
+  ] });
+  const moved = brow.layers.filter(l => /^eyebrow_9_/.test(l.name));
+  assert.strictEqual(moved.length, 2, 'brow pieces split from both lashes');
+  assert.ok(moved.every(l => !l.fade), 'split brow does not fade on blink');
+}
+console.log('rigger: face order / eyewhite-less eyes / brow-in-lash passed');

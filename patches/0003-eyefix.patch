@@ -1,0 +1,321 @@
+From fd2cf0e8f9f188ffd9e0fbee4ad5cc0dea1bc219 Mon Sep 17 00:00:00 2001
+From: Hark <hark@local>
+Date: Sun, 8 Nov 2026 12:32:22 +0000
+Subject: [PATCH] =?UTF-8?q?fix(rig):=20=E9=A1=94=E3=83=91=E3=83=BC?=
+ =?UTF-8?q?=E3=83=84=E3=81=AE=E9=87=8D=E3=81=AA=E3=82=8A=E9=A0=86=E3=82=92?=
+ =?UTF-8?q?=E8=87=AA=E5=8B=95=E8=A3=9C=E6=AD=A3=E3=80=81=E7=99=BD=E7=9B=AE?=
+ =?UTF-8?q?=E3=81=AA=E3=81=97=E3=81=A7=E3=82=82=E7=9E=AC=E3=81=8D=E3=80=81?=
+ =?UTF-8?q?=E3=81=BE=E3=81=A4=E6=AF=9B=E3=81=AB=E6=B7=B7=E3=81=96=E3=81=A3?=
+ =?UTF-8?q?=E3=81=9F=E7=9C=89=E3=82=92=E5=88=86=E9=9B=A2?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ IMPROVEMENTS.md      |   6 ++
+ lib/i18n.js          |   3 +
+ lib/rigger.js        | 145 ++++++++++++++++++++++++++++++++++++++++++-
+ package.json         |   2 +-
+ tests/rigger.test.js |  61 ++++++++++++++++++
+ 5 files changed, 214 insertions(+), 3 deletions(-)
+
+diff --git a/IMPROVEMENTS.md b/IMPROVEMENTS.md
+index 5a06e8b..36c6671 100644
+--- a/IMPROVEMENTS.md
++++ b/IMPROVEMENTS.md
+@@ -1,5 +1,11 @@
+ # 改善一覧
+ 
++## v2.3-eyefix（2026-11-08）
++
++- [x] **顔パーツの重なり順を自動補正**：白目 < 瞳 < まつ毛、顔 < 眉・鼻・口、後髪・首 < 顔 < 前髪。順序が逆で、かつ実際に重なっているペアだけを最小限に動かす（正しい PSD は一切変えない）。see-through の 6de58ad0（白目が瞳の上）/ 1982af65（眉が顔の下）
++- [x] **白目レイヤーが無い PSD でも瞬き**：瞳＋まつ毛から目のアンカーを推定し、閉じ目を自動配置（seethrough_output (3)）
++- [x] **まつ毛に混ざった眉を分離**：白目より上にある太い明るい塊を眉パーツへ移し、瞬きで消えないように（細い二重線は対象外）
++
+ ## v2.2-mouthstyles（2026-11-08）
+ 
+ - [x] **口のスタイル**（`lib/mouthstyles.js`）: SVGパスのキーフレームで描く口を5種（おまかせ / アニメ標準 / 唇あり / シンプル / デフォルメ）+ 計測。「口」のプルダウンで切り替え、設定・OBSにも保存。`docs/mouth-styles/*.svg` で一覧
+diff --git a/lib/i18n.js b/lib/i18n.js
+index 2f87062..635d084 100644
+--- a/lib/i18n.js
++++ b/lib/i18n.js
+@@ -294,6 +294,8 @@
+     '目のアンカーが不完全です（eyewhite/irides を確認）': '眼部锚点不完整（请检查 eyewhite / irides）',
+     'mouth_open / mouth_close がありません': '没有 mouth_open / mouth_close',
+     '不足する閉じ目を自動配置しました（「目」の差分バーで調整可）': '已自动补齐缺失的闭眼（可用「眼睛」的差分滑杆调整）',
++    '白目レイヤーが無いため、瞳とまつ毛から目の位置を推定しました': '没有眼白图层，已根据瞳孔和睫毛推算眼睛位置',
++    'まつ毛レイヤーに混ざっていた眉を分離しました（まばたきで消えないように）': '睫毛图层里混入的眉毛已分离出来（眨眼时不会消失）',
+     'mouth_close が無いため汎用閉じ口を自動配置しました（「口」のバーで調整可）':
+       '没有 mouth_close，已自动放置通用闭嘴（可用「嘴巴」滑杆调整）'
+   };
+@@ -342,6 +344,7 @@
+     ['数値設定が不正です: ', '数值设置无效: '],
+     ['OBSへモデルを送れません: ', '无法向 OBS 发送模型: '],
+     ['揺れ', '摆动'], ['自動生成', '自动生成'],
++    ['顔パーツの重なり順を自動補正しました（', '已自动修正五官图层顺序（'],
+   ].sort(function (a, b) { return b[0].length - a[0].length; });
+ 
+   var DICTS = { 'zh-CN': ZH };
+diff --git a/lib/rigger.js b/lib/rigger.js
+index c325e02..aae4fff 100644
+--- a/lib/rigger.js
++++ b/lib/rigger.js
+@@ -517,6 +517,134 @@
+     };
+   }
+ 
++  // ---------- painter's order sanity ----------
++  // see-through (and hand-made PSDs) sometimes emit face parts in an order that
++  // hides them: eyewhite above irides, eyebrow / mouth below the face, eyelash
++  // under the eyewhite. A face part is never meant to sit under the face, and
++  // the eye stack is always eyewhite < irides < eyelash. Parts with the same
++  // rank keep their original order (eyebrow vs eyelash is the artist's call).
++  var FACE_RANK = { 'facedetail': 1, 'nose': 1, 'mouth_open': 1, 'mouth_close': 1, 'mouth_gen': 1,
++                    'eyewhite': 2, 'irides': 3, 'eyelash': 4, 'eye_close': 4, 'eye_close2': 4,
++                    'eyebrow': 4, 'eyewear': 5 };
++  var BELOW_FACE = { 'back hair': 1, 'neck': 1 };
++  var ABOVE_FACE = { 'front hair': 1, 'side hair': 1, 'ahoge': 1 };
++  function partBaseName(p) { return baseName(p.name.replace(/_(l|r)$/, '')); }
++  function overlapPx(a, b) {   // visible pixels the two parts share
++    var x0 = Math.max(a.x, b.x), y0 = Math.max(a.y, b.y), x1 = Math.min(a.x + a.w, b.x + b.w), y1 = Math.min(a.y + a.h, b.y + b.h);
++    if (x1 <= x0 || y1 <= y0) return 0;
++    var n = 0, ad = a.img.data, bd = b.img.data;
++    for (var y = y0; y < y1; y++) for (var x = x0; x < x1; x++)
++      if (ad[((y - a.y) * a.w + (x - a.x)) * 4 + 3] > 32 && bd[((y - b.y) * b.w + (x - b.x)) * 4 + 3] > 32) n++;
++    return n;
++  }
++  // must a be drawn under b?
++  function mustBeUnder(a, b) {
++    var A = partBaseName(a), B = partBaseName(b);
++    if (A === 'face') return FACE_RANK[B] != null || !!ABOVE_FACE[B];
++    if (B === 'face') return !!BELOW_FACE[A];
++    var ra = FACE_RANK[A], rb = FACE_RANK[B];
++    return ra != null && rb != null && ra < rb && !(A === 'eyebrow' || B === 'eyebrow');
++  }
++  // Fix only pairs that are in the wrong order AND actually overlap, with the
++  // smallest move; every other layer keeps the artist's order.
++  function normalizeFaceOrder(parts) {
++    var moved = [], guard = parts.length * parts.length, cache = Object.create(null);
++    function ov(a, b) { var k = a.name + '|' + b.name; if (cache[k] == null) cache[k] = overlapPx(a, b) > 12; return cache[k]; }
++    function note(p) { var b = partBaseName(p); if (moved.indexOf(b) < 0) moved.push(b); }
++    var changed = true;
++    while (changed && guard-- > 0) {
++      changed = false;
++      outer:
++      for (var i = 0; i < parts.length; i++) for (var j = i + 1; j < parts.length; j++) {
++        var a = parts[i], b = parts[j];          // a is drawn under b now
++        if (!mustBeUnder(b, a) || !ov(a, b)) continue;
++        if (ABOVE_FACE[partBaseName(a)]) {       // bangs under the face: lift them above the whole face stack
++          var last = j;
++          for (var k = j; k < parts.length; k++) if (partBaseName(parts[k]) === 'face' || FACE_RANK[partBaseName(parts[k])] != null) last = k;
++          parts.splice(i, 1); parts.splice(last, 0, a); note(a);
++        } else if (partBaseName(b) === 'face') { // a face part under the face: lift it right above the face
++          parts.splice(i, 1); parts.splice(j, 0, a); note(a);
++        } else {                                 // otherwise drop the upper one just below the other
++          parts.splice(j, 1); parts.splice(i, 0, b); note(b);
++        }
++        changed = true; break outer;
++      }
++    }
++    return moved;
++  }
++
++  // see-through sometimes puts (part of) the eyebrow into the eyelash layer;
++  // those pixels would vanish on every blink. Pieces of the lash layer that sit
++  // clearly above the eyewhite are moved to an eyebrow part of their own.
++  function splitBrowFromLash(parts, anchors, hasWhite) {
++    var out = [];
++    for (var i = 0; i < parts.length; i++) {
++      var p = parts[i];
++      if (partBaseName(p) !== 'eyelash' || !p.side || p.synthetic || !hasWhite[p.side]) continue;
++      var EA = anchors['eye' + p.side]; if (!EA) continue;
++      var eh = Math.max(4, EA.y1 - EA.y0), w = p.w, h = p.h, d = p.img.data, k, l;
++      var yCut = EA.y0 - 0.05 * eh - p.y;   // local rows above the eyewhite
++      // lash ink = the dark end of the layer; brow pieces are lighter and sit above the eye
++      var lum = new Float32Array(w * h), vals = [];
++      for (k = 0; k < w * h; k++) if (d[k * 4 + 3] > 32) { lum[k] = (0.299 * d[k * 4] + 0.587 * d[k * 4 + 1] + 0.114 * d[k * 4 + 2]) / 255; vals.push(lum[k]); }
++      if (vals.length < 30) continue;
++      vals.sort(function (u, v) { return u - v; });
++      var ink = vals[Math.floor(vals.length * 0.2)];
++      var whole = new Uint8Array(w * h), cand = new Uint8Array(w * h);
++      for (k = 0; k < w * h; k++) {
++        if (d[k * 4 + 3] <= 32) continue;
++        whole[k] = 255;
++        if (((k / w) | 0) < yCut && lum[k] > ink + 0.28) cand[k] = 255;
++      }
++      var pick = new Uint8Array(w * h), any = false;
++      // (a) whole pieces of the layer that float above the eye
++      var cw = labelComponents(whole, w, h, 0), stat = function (cc) {
++        var n = cc.count, maxY = new Int32Array(n + 1).fill(-1), sumY = new Float64Array(n + 1);
++        for (var q = 0; q < w * h; q++) { var lb = cc.lab[q]; if (!lb) continue; var yy = (q / w) | 0; sumY[lb] += yy; if (yy > maxY[lb]) maxY[lb] = yy; }
++        return { maxY: maxY, sumY: sumY };
++      };
++      var sw = stat(cw);
++      for (l = 1; l <= cw.count; l++) if (cw.sizes[l] >= 15 && sw.maxY[l] < yCut - 0.01 * eh && sw.sumY[l] / cw.sizes[l] < yCut - 0.2 * eh) { any = true; for (k = 0; k < w * h; k++) if (cw.lab[k] === l) pick[k] = 1; }
++      // (b) light blobs fused onto the top of the lash line
++      var cl = labelComponents(cand, w, h, 0), minSize = Math.max(15, vals.length * 0.06);
++      var sc = stat(cl);
++      for (l = 1; l <= cl.count; l++) {
++        if (cl.sizes[l] < minSize || sc.maxY[l] - sc.sumY[l] / cl.sizes[l] < 1.5) continue;
++        // a brow is a thick blob; thin lines here are lid creases, which belong to the open eye
++        var cx0 = 1e9, cx1 = -1;
++        for (k = 0; k < w * h; k++) if (cl.lab[k] === l) { var ccx = k % w; if (ccx < cx0) cx0 = ccx; if (ccx > cx1) cx1 = ccx; }
++        if (cl.sizes[l] / (cx1 - cx0 + 1) < 0.18 * eh) continue;
++        any = true; for (k = 0; k < w * h; k++) if (cl.lab[k] === l) pick[k] = 1;
++      }
++      if (!any) continue;
++      for (var it = 0; it < 2; it++) {   // take the blob's own outline (mid tones), not the lash ink
++        var grow = pick.slice();
++        for (k = 0; k < w * h; k++) {
++          if (pick[k] || d[k * 4 + 3] <= 32 || ((k / w) | 0) >= yCut || lum[k] <= ink + 0.1) continue;
++          var xk = k % w;
++          if ((xk > 0 && pick[k - 1]) || (xk < w - 1 && pick[k + 1]) || (k >= w && pick[k - w]) || (k + w < w * h && pick[k + w])) grow[k] = 1;
++        }
++        pick = grow;
++      }
++      var nd = new Uint8ClampedArray(d.length);
++      for (var y2 = 0; y2 < h; y2++) for (var x2 = 0; x2 < w; x2++) {
++        var q = y2 * w + x2; if (!d[q * 4 + 3]) continue;
++        var take = pick[q];
++        if (!take && d[q * 4 + 3] <= 32 && y2 < yCut)   // antialiased fringe next to a moved piece
++          for (var dy = -1; dy <= 1 && !take; dy++) for (var dx = -1; dx <= 1; dx++) {
++            var yy = y2 + dy, xx = x2 + dx; if (yy >= 0 && xx >= 0 && yy < h && xx < w && pick[yy * w + xx]) { take = 1; break; }
++          }
++        if (take) { nd[q * 4] = d[q * 4]; nd[q * 4 + 1] = d[q * 4 + 1]; nd[q * 4 + 2] = d[q * 4 + 2]; nd[q * 4 + 3] = d[q * 4 + 3]; d[q * 4 + 3] = 0; }
++      }
++      var slot = SLOTS['eyebrow'];
++      out.push({ after: p, part: { name: 'eyebrow_9_' + p.side.toLowerCase(), source: p.source, x: p.x, y: p.y, w: w, h: h, z: 0,
++        depth: slot.depth, group: slot.group, phys: null, opacity: p.opacity, fade: null, side: p.side, strands: null,
++        fromLash: true, img: { width: w, height: h, data: nd } } });
++    }
++    out.forEach(function (o) { parts.splice(parts.indexOf(o.after) + 1, 0, o.part); });
++    return out.length;
++  }
++
+   // ---------- main ----------
+   function buildRig(psd, opts) {
+     opts = opts || {};
+@@ -615,11 +743,20 @@
+       }
+     }
+ 
++    var reordered = normalizeFaceOrder(parts);
++    if (reordered.length) warnings.push('顔パーツの重なり順を自動補正しました（' + reordered.map(function (b) { return ROLE_LABELS[b] || b; }).join('、') + '）');
++
+     // anchors
+-    var anchors = { face: FACE };
++    var anchors = { face: FACE }, eyeGuessed = false;
+     ['l', 'r'].forEach(function (s) {
+       var ew = sided['eyewhite|' + s], ir = sided['irides|' + s], ec = sided['eye_close|' + s];
+       var K = 'eye' + s.toUpperCase();
++      if (!ew) {
++        // no eyewhite (see-through sometimes drops it): the eye is where the
++        // irides and the lashes are
++        var src = [ir, sided['eyelash|' + s]].filter(Boolean);
++        if (src.length) { ew = mergeAlphas(src.map(function (a) { return { alpha: a }; }), W, H); eyeGuessed = true; }
++      }
+       if (ew) {
+         var b = bboxOf(ew, W, H, 8);
+         var a = { x0: b.x0, x1: b.x1, y0: b.y0, y1: b.y1 };
+@@ -631,6 +768,9 @@
+       }
+     });
+     if (!anchors.eyeL || !anchors.eyeR) warnings.push('目のアンカーが不完全です（eyewhite/irides を確認）');
++    else if (eyeGuessed) warnings.push('白目レイヤーが無いため、瞳とまつ毛から目の位置を推定しました');
++    if (splitBrowFromLash(parts, anchors, { L: !!sided['eyewhite|l'], R: !!sided['eyewhite|r'] }))
++      warnings.push('まつ毛レイヤーに混ざっていた眉を分離しました（まばたきで消えないように）');
+ 
+     var mouthAlpha = merged('mouth_open') || merged('mouth_close');
+     if (mouthAlpha) {
+@@ -741,5 +881,6 @@
+            SLOT_NAMES: Object.keys(SLOTS),
+            _internals: { findPeaks: findPeaks, detectStrands: detectStrands,
+                          labelComponents: labelComponents, cleanAlpha: cleanAlpha,
+-                         imageLayersOf: imageLayersOf, mergeAlphas: mergeAlphas, resampleRGBA: resampleRGBA } };
++                         imageLayersOf: imageLayersOf, mergeAlphas: mergeAlphas, resampleRGBA: resampleRGBA,
++                         normalizeFaceOrder: normalizeFaceOrder } };
+ });
+diff --git a/package.json b/package.json
+index ef29617..a463e47 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "anime25drig",
+-  "version": "2.2.0",
++  "version": "2.3.0",
+   "private": true,
+   "description": "パーツ分けPSDをドロップするだけで動く2.5Dアバターツール",
+   "license": "MIT",
+diff --git a/tests/rigger.test.js b/tests/rigger.test.js
+index 8ef9608..42f05da 100644
+--- a/tests/rigger.test.js
++++ b/tests/rigger.test.js
+@@ -110,3 +110,64 @@ assert.ok(mystery.unknown && mystery.group === 'body');
+ assert.strictEqual(Rigger.roleLabel('front hair'), '前髪');
+ 
+ console.log('rigger tests: 20 scenarios passed');
++
++// ---- face-part stacking order (see-through can emit eyewhite above irides, eyebrow under face) ----
++{
++  // one layer holding both eyes (two blocks, gap at the face centre), as see-through emits them
++  function pair(name, top, h, w) {
++    w = w || 40;
++    const L = solidLayer(name, 100, top, 100, h), d = L.imageData.data;
++    for (let y = 0; y < h; y++) for (let x = w; x < 100 - w; x++) d[(y * 100 + x) * 4 + 3] = 0;
++    return L;
++  }
++  const names = rig => rig.layers.map(l => l.name);
++  const idx = (rig, n) => names(rig).indexOf(n);
++  const bad = Rigger.buildRig({ width: 300, height: 300, children: [
++    solidLayer('back hair', 60, 10, 180, 200),
++    pair('eyebrow', 55, 8),          // under the face: would be hidden
++    solidLayer('face', 80, 30, 140, 130),
++    pair('irides', 76, 10, 30),
++    pair('eyelash', 70, 8),
++    pair('eyewhite', 74, 14),       // above irides AND eyelash
++    solidLayer('mouth', 135, 125, 30, 10),
++    solidLayer('front hair', 70, 20, 160, 50)
++  ] });
++  for (const s of ['l', 'r']) {
++    assert.ok(idx(bad, 'face') < idx(bad, 'eyebrow_' + s), 'eyebrow must be drawn above the face');
++    assert.ok(idx(bad, 'eyewhite_' + s) < idx(bad, 'irides_' + s), 'eyewhite must be under the irides');
++    assert.ok(idx(bad, 'eyewhite_' + s) < idx(bad, 'eyelash_' + s), 'eyewhite must be under the eyelash');
++  }
++  assert.ok(idx(bad, 'front hair') === bad.layers.length - 1 || idx(bad, 'front hair') > idx(bad, 'eyelash_r'), 'bangs stay on top');
++  assert.ok(bad.warnings.some(w => /重なり順/.test(w)), 'reordering is reported');
++  // a correct PSD is left exactly as painted
++  const good = Rigger.buildRig({ width: 300, height: 300, children: [
++    solidLayer('face', 80, 30, 140, 130), pair('eyewhite', 74, 14), pair('irides', 76, 10, 30),
++    pair('eyelash', 70, 8), pair('eyebrow', 55, 8), solidLayer('front hair', 70, 20, 160, 50)
++  ] });
++  assert.ok(!good.warnings.some(w => /重なり順/.test(w)), 'nothing to fix → no reorder');
++
++  // no eyewhite: eyes still get anchors (and therefore a closed eye)
++  const GP = require('../lib/genericparts.js');
++  const noWhite = Rigger.buildRig({ width: 300, height: 300, children: [
++    solidLayer('face', 80, 30, 140, 130), pair('irides', 76, 10, 30), pair('eyelash', 70, 8)
++  ] }, { generic: { eyeL: GP.get('eyeL'), eyeR: GP.get('eyeR') } });
++  assert.ok(noWhite.anchors.eyeL && noWhite.anchors.eyeR, 'irides/eyelash give the eye anchors when eyewhite is missing');
++  assert.ok(noWhite.layers.some(l => l.fade === 'eyeClose' && l.side === 'L') && noWhite.layers.some(l => l.fade === 'eyeClose' && l.side === 'R'), 'closed eyes are synthesized without eyewhite');
++
++  // a light brow blob fused on top of the lash line is moved out of the eyelash layer
++  const lash = solidLayer('eyelash', 98, 60, 104, 30);
++  const d = lash.imageData.data;
++  for (let y = 0; y < 30; y++) for (let x = 0; x < 104; x++) {
++    const q = (y * 104 + x) * 4, inEye = x < 40 || x > 64;
++    const ink = y >= 12 && y < 16 && inEye;                       // lash line at the eyewhite top
++    const blob = y >= 2 && y < 12 && ((x >= 8 && x < 30) || (x >= 74 && x < 96)); // thick light blob above, touching it
++    d[q] = d[q + 1] = d[q + 2] = ink ? 20 : 190; d[q + 3] = ink || blob ? 255 : 0;
++  }
++  const brow = Rigger.buildRig({ width: 300, height: 300, children: [
++    solidLayer('face', 80, 30, 140, 130), pair('eyewhite', 72, 16), pair('irides', 74, 12, 30), lash
++  ] });
++  const moved = brow.layers.filter(l => /^eyebrow_9_/.test(l.name));
++  assert.strictEqual(moved.length, 2, 'brow pieces split from both lashes');
++  assert.ok(moved.every(l => !l.fade), 'split brow does not fade on blink');
++}
++console.log('rigger: face order / eyewhite-less eyes / brow-in-lash passed');
+-- 
+2.47.3
+
