@@ -1,0 +1,1589 @@
+From 0c18a31cc487e9572d4c8c03cbc8be25d3f41e2a Mon Sep 17 00:00:00 2001
+From: Hark <hark@local>
+Date: Sun, 8 Nov 2026 09:16:33 +0000
+Subject: [PATCH 1/2] =?UTF-8?q?=E8=87=AA=E5=8B=95=E7=94=9F=E6=88=90?=
+ =?UTF-8?q?=E5=8F=A3=EF=BC=88mouthgen=EF=BC=89:=205=E6=AF=8D=E9=9F=B3?=
+ =?UTF-8?q?=E3=81=AE=E5=8F=A3=E5=BD=A2=E3=83=BB=E4=B8=8B=E3=81=82=E3=81=94?=
+ =?UTF-8?q?=E9=80=A3=E5=8B=95=E3=83=BB=E6=AF=8D=E9=9F=B3=E5=8F=A3=E3=83=91?=
+ =?UTF-8?q?=E3=82=AF=EF=BC=88=E3=83=9E=E3=82=A4=E3=82=AF/=E9=9F=B3?=
+ =?UTF-8?q?=E5=A3=B0=E3=83=95=E3=82=A1=E3=82=A4=E3=83=AB/OBS=EF=BC=89?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ IMPROVEMENTS.md                         |   7 +
+ MOUTHGEN.md                             |  53 ++++
+ index.html                              |  14 +
+ lib/app.js                              |  94 +++++-
+ lib/devices.js                          |  33 +-
+ lib/mouthgen.js                         | 382 ++++++++++++++++++++++++
+ lib/renderer.js                         |   4 +-
+ lib/rigger.js                           |   1 +
+ lib/runtime.js                          |   2 +-
+ obs_server.py                           |   3 +-
+ package.json                            |   4 +-
+ tests/mouthgen.test.js                  |  82 +++++
+ tools/mouth-proto/make_grid.py          |  55 ++++
+ tools/mouth-proto/make_video_metrics.py | 148 +++++++++
+ tools/mouth-proto/mouthgen.py           | 339 +++++++++++++++++++++
+ tools/mouth-proto/requirements.txt      |   5 +
+ 16 files changed, 1208 insertions(+), 18 deletions(-)
+ create mode 100644 MOUTHGEN.md
+ create mode 100644 lib/mouthgen.js
+ create mode 100644 tests/mouthgen.test.js
+ create mode 100644 tools/mouth-proto/make_grid.py
+ create mode 100644 tools/mouth-proto/make_video_metrics.py
+ create mode 100644 tools/mouth-proto/mouthgen.py
+ create mode 100644 tools/mouth-proto/requirements.txt
+
+diff --git a/IMPROVEMENTS.md b/IMPROVEMENTS.md
+index 91b09d2..10f61ff 100644
+--- a/IMPROVEMENTS.md
++++ b/IMPROVEMENTS.md
+@@ -1,5 +1,12 @@
+ # 改善一覧
+ 
++## v2.1-mouthgen（2026-11-08）
++
++- [x] **自動生成口**（`lib/mouthgen.js`）: 閉じ口の無いPSD（see-through など）で、元の口を計測して あ・い・う・え・お の口形を毎フレーム描画。口内・歯・舌・下唇、下あごと頬の連動。母音はパラメーター空間で補間するのでクロスフェードの二重像が出ない。手描きの mouth_close があれば従来どおり
++- [x] **母音で口パク**: マイク・音声ファイル（歌）からLPCフォルマントで母音を推定。OBSにも中継（`va vi vu ve vo`）。自動おしゃべりも母音をランダムに変える
++- [x] パラメーター追加: 自動生成口 / 母音 あ〜お / 下あごの動き。設定「声の高さ補正」
++- 詳細は `MOUTHGEN.md`
++
+ ## v2.0（2026-09-23）
+ 
+ 前回（2026-09-06）の「今後の提案」のうち 1（アンカー編集）、3（動画書き出し）、5（同梱による完全オフラインの顔追跡・キャリブレーション）を実装し、OBS連携・操作性・自動リグ・描画品質を全体的に見直した。
+diff --git a/MOUTHGEN.md b/MOUTHGEN.md
+new file mode 100644
+index 0000000..6e6bfa7
+--- /dev/null
++++ b/MOUTHGEN.md
+@@ -0,0 +1,53 @@
++# 自动生成口（mouthgen）— 改动说明
++
++## 解决什么
++see-through 输出的 PSD 只有一张 `mouth`。原版把它当成「张嘴」，闭嘴时换成一张通用嘴贴图，
++在 mouthOpen≈0.3 处两张图硬切，张嘴只是把原画纵向拉伸 0.5→1.0 倍。所以嘴很假，也做不出 い/う/お。
++
++## 现在怎么做
++1. 读入 PSD 时（`MouthGen.attachToRig`），测量原画的嘴：倾角、宽度、上唇弧线、线宽和颜色、肤色、原画是张嘴还是闭嘴。
++   不对任何角色写死坐标。
++2. 新增 `mouth_gen` 图层（放在原嘴的正上方），每帧按参数重画嘴并更新纹理：
++   口腔（渐变）→ 舌 → 上/下牙 → 下唇线和阴影 → 侧壁描边 → 上唇线，3×3 超采样抗锯齿。只在形状变化时重画。
++3. 口形 = 母音权重 {あ い う え お} × 开口量 `mouthOpen` + 笑 `mouthForm`，在参数空间插值，不再交叉淡化，没有重影。
++4. 下巴联动：face 网格按位移场下移；う/お 时嘴角两侧脸颊内收。强度由「下あごの動き」控制。
++5. 原画是闭嘴时（例如抿嘴），闭嘴状态直接显示原画，一个像素都不改。
++6. PSD 里有手绘的 `mouth_close` 时，自动关闭本功能，保持原来的差分切换。
++
++## 驱动
++| 来源 | 母音 | 开口量 |
++|---|---|---|
++| マイク口パク（麦克风，OBS 直播） | LPC 共振峰 F1/F2 → 5 个母音权重，每 20ms 一次 | 麦克风音量（原逻辑） |
++| 音声ファイルで口パク（歌） | 同上，读取音频文件（建议先用 UVR/Demucs 分离人声） | 同上 |
++| OBS 端 | 编辑器把 `va vi vu ve vo` 随 tracking 一起中继给 OBS | `mic` |
++| 自动おしゃべり | 每个音节随机选一个母音 | 随机 |
++| カメラ追従 | 默认 あ（摄像头不读母音） | 摄像头 mo |
++| 手动滑杆 | 母音 あ〜お 5 个滑杆 | 開き |
++
++- 「声の高さ補正」（0.8–1.25）：按声音高低缩放共振峰参考值。男声偏低时调到 0.85–0.9，女高音调到 1.1–1.2。
++- 想录有声的视频：先用「書き出し」录 WebM（只有画面），再在剪辑软件里把同一段音频对齐叠上。
++
++## 新增参数（保存进设定 JSON，也会同步到 OBS）
++`mouthGen`（0=原逻辑，1=自动生成口）、`vowelA/I/U/E/O`、`jawAmp`。
++
++## 文件
++- `lib/mouthgen.js`：分析、绘制、母音混合、下巴位移、LPC 母音估计、挂进 rig。
++- `lib/app.js`：图层挂载、每帧更新纹理、淡入淡出、face 位移、母音来源和平滑、OBS 中继。
++- `lib/renderer.js`：新增 `updateTexture`。
++- `lib/devices.js`：麦克风多一路时域分析器；新增 `startFile()` 播放音频驱动口型。
++- `lib/runtime.js`、`obs_server.py`：tracking 允许可选键 `va vi vu ve vo`。
++- `index.html`：口区 7 个滑杆；カメラ・マイク区新增按钮和「声の高さ補正」。
++- `tests/mouthgen.test.js`：形状可区分、A 开口比、I/U 宽度比、张嘴连续性、下巴、母音识别、rig 挂载。
++  用 `MOUTHGEN_PSD=你的.psd node tests/mouthgen.test.js` 可以额外在真实 PSD 上跑。
++- `tools/mouth-proto/`：Python 原型和对比脚本。
++  `python make_video_metrics.py a.psd b.psd` 会输出对比视频和 7 项验收指标；设 `NOVIDEO=1` 时只算指标。
++
++## 验收（tools/mouth-proto 同口径，旧逻辑 → 新逻辑）
++| 指标 | 目标 | st3_1280_fix | sailor_girl_1024 |
++|---|---|---|---|
++| 5 态两两最大 IoU | ≤0.60 | 1.00 → 0.56 | 1.00 → 0.55 |
++| A 开口 高/宽 | ≥0.35 | 0.33 → 0.62 | 0.23 → 0.59 |
++| I/U 宽度比 | ≥1.6 | 1.09 → 1.98 | 1.39 → 2.04 |
++| 0→1 跳帧比 | ≤3.0 | 1.59 → 1.11 | 1.16 → 1.09 |
++| 拟合原画 IoU | ≥0.80 | 0.84 | 0.91 |
++| 独立口型参数 | ≥4 | 1 → 5 | 1 → 5 |
+diff --git a/index.html b/index.html
+index 5887cb1..4d64882 100644
+--- a/index.html
++++ b/index.html
+@@ -123,6 +123,14 @@
+       <div class="row"><label>開き</label><input type="range" id="pMouthOpen" min="0" max="1" step="0.01" value="0"><span class="val"></span></div>
+       <div class="row"><label>形（笑い）</label><input type="range" id="pMouthForm" min="-1" max="1" step="0.01" value="0"><span class="val"></span></div>
+       <div class="row"><label>閉じ口 上下</label><input type="range" id="pMouthCY" min="-1" max="1" step="0.01" value="0"><span class="val"></span></div>
++      <p class="section-hint">自動生成口：PSDに閉じ口が無いとき（see-through など）、元の口から あ・い・う・え・お の口形を自動で描きます。0 で従来の差分切り替え。</p>
++      <div class="row"><label>自動生成口</label><input type="range" id="pMouthGen" min="0" max="1" step="1" value="1"><span class="val"></span></div>
++      <div class="row"><label>母音 あ</label><input type="range" id="pVowelA" min="0" max="1" step="0.01" value="0"><span class="val"></span></div>
++      <div class="row"><label>母音 い</label><input type="range" id="pVowelI" min="0" max="1" step="0.01" value="0"><span class="val"></span></div>
++      <div class="row"><label>母音 う</label><input type="range" id="pVowelU" min="0" max="1" step="0.01" value="0"><span class="val"></span></div>
++      <div class="row"><label>母音 え</label><input type="range" id="pVowelE" min="0" max="1" step="0.01" value="0"><span class="val"></span></div>
++      <div class="row"><label>母音 お</label><input type="range" id="pVowelO" min="0" max="1" step="0.01" value="0"><span class="val"></span></div>
++      <div class="row"><label>下あごの動き</label><input type="range" id="pJawAmp" min="0" max="1.5" step="0.01" value="0.55"><span class="val"></span></div>
+       <div class="row"><label>閉じやすさ</label><input type="range" id="pMouthEase" min="0" max="1" step="0.01" value="0.72"><span class="val"></span></div>
+       <div class="row"><label>閉じ口 角度</label><input type="range" id="pMouthCAng" min="-1" max="1" step="0.01" value="0"><span class="val"></span></div>
+       <div class="row"><label>口スケール</label><input type="range" id="pMouthScale" min="0.5" max="1.5" step="0.01" value="1"><span class="val"></span></div>
+@@ -171,6 +179,11 @@
+       <div class="row"><label>なめらかさ</label><input type="range" id="prefSmoothing" min="0" max="1" step="0.01"><span class="val"></span></div>
+       <div class="row"><label>マイク感度</label><input type="range" id="prefMicGain" min="0.25" max="4" step="0.01"><span class="val"></span></div>
+       <div class="row"><label>ノイズゲート</label><input type="range" id="prefMicGate" min="0" max="0.5" step="0.01"><span class="val"></span></div>
++      <div class="btns">
++        <button class="btn" type="button" id="btnAudioLip" title="歌のボーカル（人声分離したもの推奨）を再生しながら、母音を推定して口を動かします">音声ファイルで口パク（歌）</button>
++        <input type="file" id="audioLipFile" accept="audio/*" hidden>
++      </div>
++      <div class="row"><label>声の高さ補正</label><input type="range" id="prefFormantScale" min="0.8" max="1.25" step="0.01"><span class="val"></span></div>
+       <div class="meter" id="micMeter" title="マイク入力（線はノイズゲート）"><span class="meter-level"></span><span class="meter-gate"></span></div>
+     </section>
+     <section class="sec" data-sec="obs"><h2>OBS連携</h2>
+@@ -225,6 +238,7 @@
+ <script src="lib/ag-psd.min.js"></script>
+ <script src="lib/rigger.js"></script>
+ <script src="lib/genericparts.js"></script>
++<script src="lib/mouthgen.js"></script>
+ <script src="lib/runtime.js"></script>
+ <script src="lib/face-features.js"></script>
+ <script src="lib/renderer.js"></script>
+diff --git a/lib/app.js b/lib/app.js
+index 192373b..de38687 100644
+--- a/lib/app.js
++++ b/lib/app.js
+@@ -120,10 +120,55 @@ function applyAnchors(){
+   $('anchorSummary').textContent=n?n+'か所を手動で調整中':'すべて自動検出の位置です';
+   renderOverlay();invalidate();
+ }
++// ---------- procedural mouth (lib/mouthgen.js) ----------
++// See-through PSDs have one drawn `mouth` and no open/close diffs. Instead of
++// stretching that drawing and cross-fading to a generic closed mouth, measure
++// it once and draw the mouth for every frame from continuous parameters.
++const MG=window.MouthGen;
++let mg=null;                                   // {st, L, img, key, P, genA, origA}
++const VOWEL_KEYS=['a','i','u','e','o'];
++let vowelCur={a:1,i:0,u:0,e:0,o:0},micVowel=null,micVowelAt=0,remoteVowel=null,remoteVowelAt=0,talkVowel='a';
++function setupMouthGen(rig){if(MG)MG.attachToRig(rig,Rigger.baseName);}
++function mgOn(e){return !!mg&&e.mouthGen>=0.5;}
++function mouthParams(e){return MG.mix(e.vw||vowelCur,e.mouthOpen,e.mouthForm);}
++// Called once per rendered frame before deform(): updates the texture only when the shape changed.
++function updateMouthGen(e){
++  if(!mgOn(e))return;
++  const P=mouthParams(e);mg.P=P;
++  const st=mg.st;
++  if(st.origOpen){mg.genA=1;mg.origA=0;}
++  else{   // the drawing is a closed mouth: show it untouched while the mouth is closed
++    const k=smooth(Math.max(P.o/0.05,Math.abs(P.s-1)/0.05,Math.abs(P.f)/0.15));
++    mg.genA=k;mg.origA=1-k;
++  }
++  const key=[P.o,P.s,P.r,P.f,P.tt].map(v=>Math.round(v*250)).join(',');
++  if(key!==mg.key&&mg.genA>0.004){mg.key=key;MG.render(st,P,mg.img);renderer.updateTexture(mg.L,mg.img);}
++}
++// Vowel weights for this frame: microphone / audio file → OBS relay → talk → sliders → あ.
++function targetVowels(e){
++  const now=performance.now();
++  if(micVowel&&auto.mic&&mic.active&&now-micVowelAt<350)return micVowel;
++  if(OBS_MODE&&remoteVowel&&now-remoteVowelAt<500)return remoteVowel;
++  if(auto.talk&&talkOn&&!auto.mic)return {[talkVowel]:1};
++  const m={a:e.vowelA,i:e.vowelI,u:e.vowelU,e:e.vowelE,o:e.vowelO};
++  return VOWEL_KEYS.some(k=>m[k]>0.001)?m:{a:1};
++}
++function stepVowels(e,dt){
++  const t=targetVowels(e);let tot=0;for(const k of VOWEL_KEYS)tot+=Math.max(0,t[k]||0);
++  const kS=1-Math.exp(-dt*18);
++  for(const k of VOWEL_KEYS){const v=tot>0?Math.max(0,t[k]||0)/tot:(k==='a'?1:0);vowelCur[k]+=(v-vowelCur[k])*kS;}
++  e.vw=Object.assign({},vowelCur);
++}
+ function applyRig(rig){
+   if(contextLost)throw new Error('描画の復旧を待ってから読み込んでください');
++  setupMouthGen(rig);
+   const prepared=prepareLayers(rig);
+   layers.forEach(renderer.dispose);layers=prepared;currentRig=rig;
++  mg=null;
++  if(rig.mouthGen){
++    const L=layers.find(l=>l.fade==='mouthGen');
++    if(L){const st=rig.mouthGen;mg={st,L,img:(typeof ImageData!=='undefined')?new ImageData(st.box.w,st.box.h):MG.blank(st),key:'',P:MG.mix({a:1},0,0),genA:0,origA:1};}
++  }
+   CW=rig.canvas.w;CH=rig.canvas.h;
+   baseAnchors=JSON.parse(JSON.stringify(rig.anchors));anchorOffsets={};
+   applyAnchors();
+@@ -284,7 +329,8 @@ const P={angleX:0,angleY:0,angleZ:0,eyeOpenL:1,eyeOpenR:1,eyeX:0,eyeY:0,brow:0,
+   mouthOpen:0,mouthForm:0,mouthCY:0,body:0,physAmp:2,soft:2,
+   browAngL:0,browAngR:0,browAngSym:0,bangL:0,bangC:0,bangR:0,
+   armY:0,armPos:0,bust:2.5,bustY:1,irisScale:1,mouthEase:0.72,eyeEase:0.3,
+-  fhAmp:2,fhSoft:0.4,eyeCY:0,eyeCAng:0,mouthCAng:0,eyeScaleL:1,eyeScaleR:1,mouthScale:1,accAmp:1};
++  fhAmp:2,fhSoft:0.4,eyeCY:0,eyeCAng:0,mouthCAng:0,eyeScaleL:1,eyeScaleR:1,mouthScale:1,accAmp:1,
++  mouthGen:1,vowelA:0,vowelI:0,vowelU:0,vowelE:0,vowelO:0,jawAmp:0.55};
+ const DEFAULTS=Object.assign({},P);
+ const T=Object.assign({},P);
+ const cur=Object.assign({},P);
+@@ -299,7 +345,8 @@ const sliders={pAngleX:'angleX',pAngleY:'angleY',pAngleZ:'angleZ',pEyeL:'eyeOpen
+   pBangL:'bangL',pBangC:'bangC',pBangR:'bangR',pArmY:'armY',pArmPos:'armPos',
+   pBust:'bust',pBustY:'bustY',pIrisScale:'irisScale',pMouthEase:'mouthEase',pEyeEase:'eyeEase',
+   pFhAmp:'fhAmp',pFhSoft:'fhSoft',pEyeCY:'eyeCY',pEyeCAng:'eyeCAng',pMouthCAng:'mouthCAng',
+-  pEyeScaleL:'eyeScaleL',pEyeScaleR:'eyeScaleR',pMouthScale:'mouthScale',pAccAmp:'accAmp'};
++  pEyeScaleL:'eyeScaleL',pEyeScaleR:'eyeScaleR',pMouthScale:'mouthScale',pAccAmp:'accAmp',
++  pMouthGen:'mouthGen',pVowelA:'vowelA',pVowelI:'vowelI',pVowelU:'vowelU',pVowelE:'vowelE',pVowelO:'vowelO',pJawAmp:'jawAmp'};
+ const sliderOf={};
+ const parameterRanges={};
+ // Attach a number box to every range row. onValue(value, final) is called on edits.
+@@ -708,6 +755,7 @@ function renderDiagnostics(rig){
+   if(layers.some(L=>L.bn==='eye_close2'))add('ok','長い閉じ目（eye_close2）');
+   eyePart('eyebrow','眉（eyebrow）',false);
+   add(real('mouth_open').length?'ok':'bad','開き口（mouth_open）',real('mouth_open').length?'':'口パクできません');
++  if(rig.mouthGen)add('auto','自動生成口',(rig.mouthGen.origOpen?'元の口は開いた絵':'元の口は閉じた絵（閉じ口に使用）')+' · あいうえお・下あご連動');
+   if(real('mouth_close').length)add('ok','閉じ口（mouth_close）');else if(synth('mouth_close'))add('auto','閉じ口','汎用差分を自動配置（「口」のバーで調整可）');else add('warn','閉じ口（mouth_close）','見つかりません');
+   const strands=bn=>layers.filter(L=>L.bn===bn).reduce((s,L)=>s+(L.strands?L.strands.length:0),0);
+   const hair=['front hair','side hair','ahoge','back hair'].filter(bn=>layers.some(L=>L.bn===bn));
+@@ -900,7 +948,7 @@ $('btnResetAnchors').addEventListener('click',()=>{anchorOffsets={};applyAnchors
+ const PREF_SCHEMA={
+   headGain:[0.3,2,1],eyeGain:[0.5,2,1],mouthGain:[0.5,2.5,1],browGain:[0,2,1],gazeGain:[0,2,1],smoothing:[0,1,0.5],
+   linkEyes:['bool',true],trackBrow:['bool',true],trackSmile:['bool',true],camPreview:['bool',true],
+-  micGain:[0.25,4,1],micGate:[0,0.5,0.05],
++  micGain:[0.25,4,1],micGate:[0,0.5,0.05],formantScale:[0.8,1.25,1],
+   exportBg:['enum',['transparent','green','dark'],'transparent'],recSeconds:[1,60,5],recFps:['enum',[30,60],30],recFormat:['any',''],
+   obsSync:['bool',true],collapsed:['any',[]],calibration:['any',null]};
+ let prefs=RT.prefs(null,PREF_SCHEMA);
+@@ -909,7 +957,7 @@ if(!prefs.calibration||typeof prefs.calibration!=='object'||!Object.keys(FF.DEFA
+ if(!Array.isArray(prefs.collapsed))prefs.collapsed=[];
+ let prefTimer=null;
+ function savePrefs(){clearTimeout(prefTimer);prefTimer=setTimeout(()=>{try{storageSet('anime25d.prefs',JSON.stringify(prefs));}catch(err){}},200);}
+-const prefSliders={prefHeadGain:'headGain',prefEyeGain:'eyeGain',prefMouthGain:'mouthGain',prefBrowGain:'browGain',prefGazeGain:'gazeGain',prefSmoothing:'smoothing',prefMicGain:'micGain',prefMicGate:'micGate'};
++const prefSliders={prefHeadGain:'headGain',prefEyeGain:'eyeGain',prefMouthGain:'mouthGain',prefBrowGain:'browGain',prefGazeGain:'gazeGain',prefSmoothing:'smoothing',prefMicGain:'micGain',prefMicGate:'micGate',prefFormantScale:'formantScale'};
+ for(const [id,key] of Object.entries(prefSliders)){
+   const el=$(id);el.value=prefs[key];
+   const b=bindRange(el,value=>{prefs[key]=value;savePrefs();tracker.setOptions(trackerOptions());});
+@@ -995,7 +1043,15 @@ const mic=window.RigDevices.createMic({onState:(s,msg)=>{
+   else if(s==='on')micChip('マイク使用中');
+   else micChip(toggleLabels.mic);
+   if(s==='error'){auto.mic=false;syncToggle('mic');status(msg,true);updateLiveTicker();}
++  if(s==='ended'){auto.mic=false;syncToggle('mic');status('音声ファイルの再生が終わりました');updateLiveTicker();}
+ }});
++$('btnAudioLip').addEventListener('click',()=>$('audioLipFile').click());
++$('audioLipFile').addEventListener('change',ev=>{
++  const f=ev.target.files&&ev.target.files[0];ev.target.value='';if(!f)return;
++  auto.mic=true;syncToggle('mic');
++  mic.startFile(f).then(()=>{micChip('音声で口パク中');status(f.name+' を再生して口パクします（マイク口パクを押すと停止）');updateLiveTicker();})
++    .catch(err=>{auto.mic=false;syncToggle('mic');micChip(toggleLabels.mic);status(err.message,true);updateLiveTicker();});
++});
+ function startMic(){mic.start().catch(err=>{auto.mic=false;syncToggle('mic');micChip(toggleLabels.mic);status('マイクを開始できません: '+err.message,true);updateLiveTicker();});}
+ let meterAt=0;
+ function updateMeter(now){
+@@ -1012,7 +1068,10 @@ function liveTracking(){
+   const camOn=auto.cam&&cam.live&&performance.now()-lastTrackingAt<1200;
+   const v={live:camOn,ax:cam.ax,ay:cam.ay,az:cam.az,eL:cam.eL,eR:cam.eR,mo:cam.mo,ex:cam.ex,ey:cam.ey,br:cam.br||0,mf:cam.mf||0};
+   if(!camOn)Object.assign(v,{ax:0,ay:0,az:0,eL:1,eR:1,mo:0,ex:0,ey:0,br:0,mf:0});
+-  if(auto.mic&&mic.active)v.mic=micLevel;
++  if(auto.mic&&mic.active){
++    v.mic=micLevel;
++    if(micVowel&&performance.now()-micVowelAt<350)Object.assign(v,{va:micVowel.a,vi:micVowel.i,vu:micVowel.u,ve:micVowel.e,vo:micVowel.o});
++  }
+   return RT.tracking(v);
+ }
+ function syncState(immediate){if(!OBS_MODE&&layers.length)sync.publishState({type:'state',settings:settingsSnapshot()},immediate);}
+@@ -1020,7 +1079,8 @@ function receiveTracking(value){
+   if(value===null){cam.live=false;return;}
+   const clean=RT.tracking(value);if(!clean)return;
+   if(clean.mic!==undefined){remoteMic=clean.mic;remoteMicAt=performance.now();}
+-  delete clean.mic;
++  if(clean.va!==undefined){remoteVowel={a:clean.va,i:clean.vi||0,u:clean.vu||0,e:clean.ve||0,o:clean.vo||0};remoteVowelAt=performance.now();}
++  for(const k of ['mic','va','vi','vu','ve','vo'])delete clean[k];
+   if(!auto.cam&&!OBS_MODE)return;
+   Object.assign(cam,{br:0,mf:0},clean);lastTrackingAt=performance.now();
+ }
+@@ -1076,6 +1136,8 @@ function fadeAlpha(L,e,alt){
+     if((L.fade==='eyeClose2')!==alternate)return 0;
+     const v=L.side==='L'?e.eyeOpenL:e.eyeOpenR;return 1-smooth((v-(0.10+e.eyeEase*0.45))/0.15);
+   }
++  if(L.fade==='mouthGen')return mgOn(e)?mg.genA:0;
++  if(mgOn(e)&&(L.fade==='mouthOpen'||L.fade==='mouthClose'))return L.synthetic?0:L.fade==='mouthOpen'?mg.origA:0;
+   if(L.fade==='mouthOpen')return smooth((e.mouthOpen-(0.05+e.mouthEase*0.35))/0.12);
+   if(L.fade==='mouthClose')return 1-smooth((e.mouthOpen-(0.05+e.mouthEase*0.35))/0.12);
+   return 1;
+@@ -1088,7 +1150,7 @@ function deform(L,e){
+   const ab=e.body*0.028,cb=Math.cos(ab),sb=Math.sin(ab);
+   const bn=L.bn,eyeSide=L.side,EA=eyeSide==='L'?A.eyeL:(eyeSide==='R'?A.eyeR:null);
+   const vOpen=eyeSide==='L'?e.eyeOpenL:e.eyeOpenR;
+-  const mo=e.mouthOpen,mHalfW=(A.mouth.x1-A.mouth.x0)/2;
++  const mo=e.mouthOpen,mHalfW=(A.mouth.x1-A.mouth.x0)/2,gen=mgOn(e)&&mg.P;
+   const nS=L.strands?L.strands.length:0;
+   const bcx=L.x+L.w/2,bcy=L.y+L.h/2;
+   const kind=L.phys==='sway'?'acc':FRONTISH[bn]?'fh':'bh';
+@@ -1104,7 +1166,7 @@ function deform(L,e){
+       const sE=eyeSide==='L'?e.eyeScaleL:e.eyeScaleR;
+       if(sE!==1){const cxE=(EA.x0+EA.x1)/2,cyE=(EA.y0+EA.y1)/2;x=cxE+(x-cxE)*sE;y=cyE+(y-cyE)*sE;}
+     }
+-    if(bn==='mouth_open'||bn==='mouth_close'){
++    if(bn==='mouth_open'||bn==='mouth_close'||bn==='mouth_gen'){
+       const sM=e.mouthScale;
+       if(sM!==1){x=A.mouth.cx+(x-A.mouth.cx)*sM;y=A.mouth.cy+(y-A.mouth.cy)*sM;}
+     }
+@@ -1130,17 +1192,23 @@ function deform(L,e){
+       const th=(eyeSide==='L'?(e.browAngL+e.browAngSym):(e.browAngR-e.browAngSym))*0.30;
+       if(th){const ct=Math.cos(th),st=Math.sin(th),rx=x-bcx,ry=y-bcy;x=bcx+rx*ct-ry*st;y=bcy+rx*st+ry*ct;}
+     }
+-    if(L.fade==='mouthOpen'){
++    if(L.fade==='mouthOpen'&&!gen){
+       y=A.mouth.y0+(y-A.mouth.y0)*(0.5+0.5*mo);
+       const q=Math.pow(Math.abs(x-A.mouth.cx)/(mHalfW+4),1.5);
+       y-=e.mouthForm*6*FS*(q-0.35);
+     }
++    if(bn==='mouth_gen'){   // follows the mouth anchor and the closed-mouth sliders
++      const mOff=anchorOffsets.mouth||{};x+=mOff.dx||0;y+=(mOff.dy||0)+e.mouthCY*14*FS;
++      const thG=e.mouthCAng*0.35;
++      if(thG){const ct=Math.cos(thG),st=Math.sin(thG),rx=x-A.mouth.cx,ry=y-A.mouth.cy;x=A.mouth.cx+rx*ct-ry*st;y=A.mouth.cy+rx*st+ry*ct;}
++    }
+     if(L.fade==='mouthClose'){
+       y+=e.mouthCY*14*FS;
+       const thM=e.mouthCAng*0.35;
+       if(thM){const ct=Math.cos(thM),st=Math.sin(thM),rx=x-A.mouth.cx,ry=y-A.mouth.cy;x=A.mouth.cx+rx*ct-ry*st;y=A.mouth.cy+rx*st+ry*ct;}
+     }
+-    if(bn==='face'&&y>A.mouth.cy)y+=mo*6*FS*smooth((y-A.mouth.cy)/Math.max(1,A.face.y1-A.mouth.cy));
++    if(bn==='face'&&gen){const j=MG.jaw(mg.st,mg.P,x,y,e.jawAmp);x+=j[0];y+=j[1];}
++    else if(bn==='face'&&y>A.mouth.cy)y+=mo*6*FS*smooth((y-A.mouth.cy)/Math.max(1,A.face.y1-A.mouth.cy));
+     // --- head transform ---
+     let hw=isHead?1:(L.group==='body'?0.16:0);   // body subtly follows head XYZ
+     if(bn==='neck')hw=0.55*smooth((A.neckBottom-y)/Math.max(1,A.neckBottom-A.neckTop));
+@@ -1202,6 +1270,7 @@ function updateSprings(e,t,dt,wind){
+ function restPose(dt){
+   const e=Object.assign({},T,{angleX:0,angleY:0,angleZ:0,body:0,eyeX:0,eyeY:0,irisBounceX:1,irisBounceY:1,breath:0,breathHead:0});
+   if(anchorPreview==='L')e.eyeOpenL=0;if(anchorPreview==='R')e.eyeOpenR=0;
++  e.vw=Object.assign({},vowelCur);
+   updateSprings(e,0,dt,false);
+   return e;
+ }
+@@ -1236,7 +1305,7 @@ function animate(now,dt){
+   const remoteMicLive=OBS_MODE&&performance.now()-remoteMicAt<500;
+   if(auto.talk&&!camLive&&!auto.mic&&!remoteMicLive&&!activePreset){
+     if(now>nextTalkState){talkOn=!talkOn;nextTalkState=now+(talkOn?1200+Math.random()*2200:600+Math.random()*1800);}
+-    if(talkOn&&now>nextSyl){nextSyl=now+70+Math.random()*110;talkTgt=Math.random()<0.25?0.04:0.25+Math.random()*0.75;}
++    if(talkOn&&now>nextSyl){nextSyl=now+70+Math.random()*110;talkTgt=Math.random()<0.25?0.04:0.25+Math.random()*0.75;talkVowel=VOWEL_KEYS[Math.floor(Math.random()*5)];}
+     if(!talkOn)talkTgt=0;
+     talkV+=(talkTgt-talkV)*Math.min(1,dt*22);
+     tgt.mouthOpen=Math.max(tgt.mouthOpen,talkV);
+@@ -1268,12 +1337,14 @@ function animate(now,dt){
+   e.physAmp*=camPhysScale;e.soft*=camPhysScale;e.fhAmp*=camPhysScale;e.fhSoft*=camPhysScale;
+   e.breath=0.5+0.5*Math.sin(t*2*Math.PI/3.4);
+   e.breathHead=0.5+0.5*Math.sin(t*2*Math.PI/3.4-0.6);   // head follows chest with a lag
++  stepVowels(e,dt);
+   updateSprings(e,t,dt,auto.idle);
+   return e;
+ }
+ 
+ // ---------- render loop ----------
+ function render(e){
++  updateMouthGen(e);
+   const alt={L:false,R:false};
+   for(const L of layers)if(L.fade==='eyeClose2'&&L.side&&L.visible&&L.opacity>0)alt[L.side]=true;
+   const items=[],masks=[];
+@@ -1326,6 +1397,7 @@ function updateLiveTicker(){
+   const need=!OBS_MODE&&(auto.cam||auto.mic);
+   if(need&&!liveTicker)liveTicker=window.RigDevices.createTicker(20,()=>{
+     micLevel=auto.mic&&mic.active?mic.sample(prefs.micGain,prefs.micGate):0;
++    if(auto.mic&&mic.active&&micLevel>0.02){const v=mic.vowel({formantScale:prefs.formantScale});if(v){micVowel=v;micVowelAt=performance.now();}}
+     if(auto.cam||auto.mic)sync.publishTracking(liveTracking());
+   });
+   else if(!need&&liveTicker){liveTicker.stop();liveTicker=null;micLevel=0;}
+diff --git a/lib/devices.js b/lib/devices.js
+index 88d4c71..01d9171 100644
+--- a/lib/devices.js
++++ b/lib/devices.js
+@@ -148,7 +148,7 @@ function createCamera(opts){
+ 
+ function createMic(opts){
+   const o=Object.assign({onState:null},opts);
+-  let gen=0,stream=null,ctx=null,analyser=null,buf=null,level=0,raw=0;
++  let gen=0,stream=null,ctx=null,analyser=null,buf=null,level=0,raw=0,an2=null,fbuf=null,audioEl=null,audioUrl=null;
+   const state=(s,msg)=>{o.onState&&o.onState(s,msg);};
+   async function start(){
+     const token=++gen;let st=null,ac=null;
+@@ -163,6 +163,7 @@ function createMic(opts){
+       if(token!==gen){st.getTracks().forEach(t=>t.stop());if(ac.state!=='closed')await ac.close();return false;}
+       const src=ac.createMediaStreamSource(st);analyser=ac.createAnalyser();analyser.fftSize=512;
+       buf=new Uint8Array(analyser.frequencyBinCount);src.connect(analyser);
++      attachVowel(ac,src);
+       st.getTracks().forEach(t=>t.addEventListener('ended',()=>{if(token===gen){stop(true);state('error','マイクが切断されました');}}));
+       state('on');
+       return true;
+@@ -174,8 +175,36 @@ function createMic(opts){
+       throw new Error(err.name==='NotAllowedError'?'ブラウザのマイク許可を確認してください':err.message);
+     }
+   }
++  // Second analyser: time-domain frames for the LPC vowel estimate (lib/mouthgen.js).
++  function attachVowel(ac,src){an2=ac.createAnalyser();an2.fftSize=1024;fbuf=new Float32Array(an2.fftSize);src.connect(an2);}
++  function vowel(opts){
++    if(!an2||!ctx||!root.MouthGen)return null;
++    an2.getFloatTimeDomainData(fbuf);
++    return root.MouthGen.vowelFromSamples(fbuf,ctx.sampleRate,opts);
++  }
++  // Drive the mouth from an audio file (a vocal stem works best) instead of the microphone.
++  // It is played through the speakers, so a recording can be lined up with the song.
++  async function startFile(file){
++    stop(true);const token=++gen;
++    state('loading');
++    const AC=root.AudioContext||root.webkitAudioContext,ac=new AC();ctx=ac;
++    try{
++      await ac.resume();
++      const el=new Audio();audioUrl=URL.createObjectURL(file);el.src=audioUrl;audioEl=el;
++      const src=ac.createMediaElementSource(el);
++      analyser=ac.createAnalyser();analyser.fftSize=512;buf=new Uint8Array(analyser.frequencyBinCount);
++      src.connect(analyser);attachVowel(ac,src);src.connect(ac.destination);
++      el.addEventListener('ended',()=>{if(token===gen){stop(true);state('ended');}});
++      await el.play();
++      if(token!==gen)return false;
++      state('on');return true;
++    }catch(err){if(token===gen){stop(true);}throw new Error('音声を再生できません: '+err.message);}
++  }
+   function stop(quiet){
+     gen++;
++    if(audioEl){try{audioEl.pause();}catch(err){}audioEl=null;}
++    if(audioUrl){URL.revokeObjectURL(audioUrl);audioUrl=null;}
++    an2=null;fbuf=null;
+     if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;
+     if(ctx)ctx.close().catch(()=>{});ctx=null;analyser=null;buf=null;level=0;raw=0;
+     if(!quiet)state('off');
+@@ -190,7 +219,7 @@ function createMic(opts){
+     level+=(v-level)*0.45;
+     return level;
+   }
+-  return {start,stop,sample,get active(){return !!analyser;},get raw(){return raw;},get level(){return level;}};
++  return {start,startFile,stop,sample,vowel,get playingFile(){return !!audioEl;},get active(){return !!analyser;},get raw(){return raw;},get level(){return level;}};
+ }
+ 
+ root.RigDevices={createCamera,createMic,createTicker,FM_VERSION};
+diff --git a/lib/mouthgen.js b/lib/mouthgen.js
+new file mode 100644
+index 0000000..d0a619c
+--- /dev/null
++++ b/lib/mouthgen.js
+@@ -0,0 +1,382 @@
++/*!
++ * Anime2.5DRig — mouthgen.js
++ * Procedural mouth (自動生成口) for see-through style PSDs that ship a single
++ * `mouth` layer and no open/close diffs.
++ *
++ *  1. analyze(): measures the drawn mouth once (tilt, half width, upper-lip
++ *     curve, line weight / colour, skin colour, whether the drawing is open).
++ *     Nothing is hard-coded per character.
++ *  2. render(): draws the mouth for continuous parameters
++ *     {o: open 0..1, s: width, r: roundness 0..1, f: smile -1..1, tt: teeth 0..1}
++ *     in layers: cavity → tongue → teeth → lower lip line/shade → side walls →
++ *     upper lip line, with supersampled anti-aliasing.
++ *  3. mix(): vowel weights {a,i,u,e,o} + openness → parameters. Vowels are
++ *     interpolated in parameter space, so there is no cross-fade ghosting.
++ *  4. jaw(): displacement of the face mesh (jaw drop, cheeks pull in on U/O).
++ *  5. vowelFromSamples(): LPC formant (F1/F2) vowel estimate for mic / audio.
++ * MIT License
++ */
++(function (root, factory) {
++  if (typeof module === 'object' && module.exports) module.exports = factory();
++  else root.MouthGen = factory();
++})(typeof self !== 'undefined' ? self : this, function () {
++  'use strict';
++  var SS = 3;   // supersampling per axis
++
++  function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
++  function sstep(x) { x = clamp(x, 0, 1); return x * x * (3 - 2 * x); }
++  function lum(r, g, b) { return r * 0.299 + g * 0.587 + b * 0.114; }
++  function percentile(arr, p) {
++    if (!arr.length) return 0;
++    var s = Float64Array.from(arr).sort();
++    var i = clamp((s.length - 1) * p / 100, 0, s.length - 1), lo = Math.floor(i), hi = Math.ceil(i);
++    return s[lo] + (s[hi] - s[lo]) * (i - lo);
++  }
++  function solve3(M, y) {   // Gaussian elimination, 3x3
++    var A = [M[0].concat([y[0]]), M[1].concat([y[1]]), M[2].concat([y[2]])];
++    for (var c = 0; c < 3; c++) {
++      var p = c; for (var r = c + 1; r < 3; r++) if (Math.abs(A[r][c]) > Math.abs(A[p][c])) p = r;
++      var t = A[c]; A[c] = A[p]; A[p] = t;
++      if (Math.abs(A[c][c]) < 1e-12) return null;
++      for (var r2 = 0; r2 < 3; r2++) if (r2 !== c) {
++        var k = A[r2][c] / A[c][c];
++        for (var j = c; j < 4; j++) A[r2][j] -= k * A[c][j];
++      }
++    }
++    return [A[0][3] / A[0][0], A[1][3] / A[1][1], A[2][3] / A[2][2]];
++  }
++
++  // ---------------------------------------------------------------- analyze
++  /**
++   * mouth / face: {x, y, img:{width,height,data}} in PSD pixel coordinates
++   * (straight alpha RGBA). Returns null when the mouth layer is unusable.
++   */
++  function analyze(mouth, face) {
++    var mi = mouth.img, mw = mi.width, mh = mi.height, md = mi.data;
++    var xs = [], ys = [], ws = [], R = [], G = [], B = [];
++    for (var j = 0; j < mh; j++) for (var i = 0; i < mw; i++) {
++      var q = (j * mw + i) * 4, a = md[q + 3] / 255;
++      if (a <= 0.25) continue;
++      xs.push(mouth.x + i + 0.5); ys.push(mouth.y + j + 0.5); ws.push(a);
++      R.push(md[q] / 255); G.push(md[q + 1] / 255); B.push(md[q + 2] / 255);
++    }
++    var n = xs.length;
++    if (n < 12) return null;
++    var sw = 0, cx = 0, cy = 0, k;
++    for (k = 0; k < n; k++) { sw += ws[k]; cx += xs[k] * ws[k]; cy += ys[k] * ws[k]; }
++    cx /= sw; cy /= sw;
++    var sxx = 0, sxy = 0, syy = 0;
++    for (k = 0; k < n; k++) { var dx = xs[k] - cx, dy = ys[k] - cy; sxx += ws[k] * dx * dx; sxy += ws[k] * dx * dy; syy += ws[k] * dy * dy; }
++    var th = 0.5 * Math.atan2(2 * sxy, sxx - syy);   // major axis angle
++    if (Math.abs(th) > Math.PI / 2.2) th = 0;          // a mouth is never vertical
++    var e1 = [Math.cos(th), Math.sin(th)], e2 = [-e1[1], e1[0]];
++    if (e2[1] < 0) { e2 = [-e2[0], -e2[1]]; }
++    var U = new Float64Array(n), V = new Float64Array(n);
++    for (k = 0; k < n; k++) { var px = xs[k] - cx, py = ys[k] - cy; U[k] = px * e1[0] + py * e1[1]; V[k] = px * e2[0] + py * e2[1]; }
++    var u0 = percentile(U, 0.5), u1 = percentile(U, 99.5), umid = (u0 + u1) / 2;
++    cx += e1[0] * umid; cy += e1[1] * umid;
++    for (k = 0; k < n; k++) U[k] -= umid;
++    var w0 = Math.max(4, (u1 - u0) / 2);
++
++    // skin: ring around the mouth on the face layer
++    var skin = [0.9, 0.75, 0.7];
++    if (face && face.img) {
++      var fi = face.img, fw = fi.width, fh = fi.height, fd = fi.data, sr = 0, sg = 0, sb = 0, sn = 0;
++      var x0 = Math.floor(cx - w0 * 2.3), x1 = Math.ceil(cx + w0 * 2.3), y0 = Math.floor(cy - w0 * 1.5), y1 = Math.ceil(cy + w0 * 1.5);
++      for (var yy = y0; yy < y1; yy++) for (var xx = x0; xx < x1; xx++) {
++        var dd = Math.hypot(xx - cx, (yy - cy) * 1.6);
++        if (dd < w0 * 1.3 || dd > w0 * 2.2) continue;
++        var fx = xx - face.x, fy = yy - face.y;
++        if (fx < 0 || fy < 0 || fx >= fw || fy >= fh) continue;
++        var fq = (fy * fw + fx) * 4;
++        if (fd[fq + 3] < 230) continue;
++        sr += fd[fq]; sg += fd[fq + 1]; sb += fd[fq + 2]; sn++;
++      }
++      if (sn > 10) skin = [sr / sn / 255, sg / sn / 255, sb / sn / 255];
++    }
++    var sl = lum(skin[0], skin[1], skin[2]);
++    var L = new Float64Array(n);
++    for (k = 0; k < n; k++) L[k] = lum(R[k], G[k], B[k]);
++    var Lmin = percentile(L, 2);
++    var dk = new Float64Array(n), dsum = 0, lc = [0, 0, 0], lw = 0;
++    for (k = 0; k < n; k++) {
++      dk[k] = clamp((sl * 0.92 - L[k]) / Math.max(1e-3, sl * 0.92 - Lmin), 0, 1) * ws[k];
++      dsum += dk[k];
++      var w3 = dk[k] * dk[k] * dk[k];
++      lc[0] += R[k] * w3; lc[1] += G[k] * w3; lc[2] += B[k] * w3; lw += w3;
++    }
++    var line = lw > 1e-6 ? [lc[0] / lw, lc[1] / lw, lc[2] / lw] : [0.3, 0.15, 0.15];
++    var t0 = clamp(dsum / (2 * w0), Math.max(1.0, 0.055 * w0), w0 * 0.2);
++
++    // upper-lip curve: per column, upper 60 % of the dark pixels → quadratic fit
++    var nb = Math.max(8, Math.floor(w0 / 2)), cu = [], cv = [];
++    for (var bI = 0; bI < nb; bI++) {
++      var ua = -w0 + 2 * w0 * bI / nb, ub = ua + 2 * w0 / nb, vv = [], vw = [];
++      for (k = 0; k < n; k++) if (dk[k] > 0.35 && U[k] >= ua && U[k] < ub) { vv.push(V[k]); vw.push(dk[k]); }
++      if (!vv.length) continue;
++      var lim = percentile(vv, 60), s1 = 0, s2 = 0;
++      for (var m = 0; m < vv.length; m++) if (vv[m] <= lim) { s1 += vv[m] * vw[m]; s2 += vw[m]; }
++      cu.push((ua + ub) / 2); cv.push(s1 / Math.max(1e-6, s2));
++    }
++    var coef = [0, 0, 0];   // v = c0 + c1 u + c2 u²
++    if (cu.length >= 3) {
++      var S = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], Y = [0, 0, 0];
++      for (k = 0; k < cu.length; k++) {
++        var p = [1, cu[k], cu[k] * cu[k]];
++        for (var r = 0; r < 3; r++) { Y[r] += p[r] * cv[k]; for (var c = 0; c < 3; c++) S[r][c] += p[r] * p[c]; }
++      }
++      coef = solve3(S, Y) || [cv.reduce(function (a, b) { return a + b; }, 0) / cv.length, 0, 0];
++    } else if (cv.length) coef = [cv[0], 0, 0];
++
++    // was the drawing open? interior = clearly not skin and not ink
++    var inter = 0, solid = 0, tR = 0, tG = 0, tB = 0, tN = 0, vmin = 1e9, vmax = -1e9, Li = [];
++    var isInt = new Uint8Array(n);
++    for (k = 0; k < n; k++) {
++      if (ws[k] <= 0.5) continue;
++      solid++;
++      var diff = Math.abs(R[k] - skin[0]) + Math.abs(G[k] - skin[1]) + Math.abs(B[k] - skin[2]);
++      if (diff > 0.12 && Math.abs(U[k]) < w0 * 0.25) { vmin = Math.min(vmin, V[k]); vmax = Math.max(vmax, V[k]); }
++      if (dk[k] > 0.35) continue;
++      if (diff > 0.12 && (L[k] > sl || L[k] < sl * 0.8)) { inter++; isInt[k] = 1; Li.push(L[k]); }
++    }
++    var interFrac = inter / Math.max(1, solid), hCenter = vmax > vmin ? vmax - vmin : 0;
++    var origOpen = interFrac > 0.15 && hCenter > 2.5 * t0;
++    // An open drawing has a dark cavity that the ink estimate counts as line: keep anime line weights.
++    if (origOpen || interFrac > 0.15) t0 = Math.min(t0, Math.max(1.0, 0.09 * w0));
++    var teeth = [0.85 + 0.15 * skin[0], 0.85 + 0.15 * skin[1], 0.85 + 0.15 * skin[2]];
++    if (origOpen) {
++      var tl = percentile(Li, 70);
++      for (k = 0; k < n; k++) if (isInt[k] && L[k] >= tl) { tR += R[k]; tG += G[k]; tB += B[k]; tN++; }
++      if (tN) teeth = [tR / tN, tG / tN, tB / tN];
++    }
++    teeth = [teeth[0] * 0.6 + 0.97 * 0.4, teeth[1] * 0.6 + 0.95 * 0.4, teeth[2] * 0.6 + 0.94 * 0.4];
++    var deep = [0.42, 0.10, 0.14];
++    var cavity = [line[0] * 0.45 + deep[0] * 0.55, line[1] * 0.45 + deep[1] * 0.55, line[2] * 0.45 + deep[2] * 0.55];
++    var tongue = [0.86 * 0.75 + skin[0] * 0.25, 0.45 * 0.75 + skin[1] * 0.25, 0.47 * 0.75 + skin[2] * 0.25];
++    var lipshade = [skin[0] * 0.90, skin[1] * 0.80, skin[2] * 0.80];
++    var Rb = Math.ceil(w0 * 1.9) + 6;
++    var box = { x: Math.floor(cx - Rb), y: Math.floor(cy - Rb), w: 2 * Rb, h: 2 * Rb };
++    var faceBox = null;
++    if (face && face.img) faceBox = { x0: face.x, y0: face.y, x1: face.x + face.img.width, y1: face.y + face.img.height };
++    return { c: [cx, cy], th: th, e1: e1, e2: e2, w0: w0, coef: coef, t0: t0, line: line, skin: skin,
++             teeth: teeth, cavity: cavity, tongue: tongue, lipshade: lipshade, origOpen: origOpen,
++             interFrac: interFrac, hCenter: hCenter, box: box, faceBox: faceBox };
++  }
++
++  // ---------------------------------------------------------------- params
++  var CLOSED = { o: 0, s: 1, r: 0, f: 0, tt: 0 };
++  var VOWELS = {
++    a: { o: 1.00, s: 1.00, r: 0.35, f: 0.0, tt: 0.55 },
++    i: { o: 0.34, s: 1.18, r: 0.0, f: 0.35, tt: 1.0 },
++    u: { o: 0.38, s: 0.58, r: 1.0, f: -0.1, tt: 0.0 },
++    e: { o: 0.55, s: 1.10, r: 0.15, f: 0.2, tt: 0.7 },
++    o: { o: 0.72, s: 0.70, r: 1.0, f: -0.1, tt: 0.25 }
++  };
++  var KEYS = ['o', 's', 'r', 'f', 'tt'];
++  /** weights {a,i,u,e,o} (any scale), open 0..1, form -1..1 → params */
++  function mix(weights, open, form) {
++    var w = weights || { a: 1 }, tot = 0, shape = { o: 0, s: 0, r: 0, f: 0, tt: 0 }, v;
++    for (v in VOWELS) tot += Math.max(0, w[v] || 0);
++    if (tot < 1e-6) { w = { a: 1 }; tot = 1; }
++    for (v in VOWELS) {
++      var k = Math.max(0, w[v] || 0) / tot;
++      if (!k) continue;
++      for (var i = 0; i < KEYS.length; i++) shape[KEYS[i]] += VOWELS[v][KEYS[i]] * k;
++    }
++    var t = clamp(open, 0, 1), out = {};
++    for (var j = 0; j < KEYS.length; j++) out[KEYS[j]] = CLOSED[KEYS[j]] + (shape[KEYS[j]] - CLOSED[KEYS[j]]) * t;
++    out.f = clamp(out.f + (form || 0) * 0.8, -1, 1);
++    return out;
++  }
++  function geom(st, P) {
++    var w0 = st.w0, c0 = st.coef[0], c1 = st.coef[1], c2 = st.coef[2];
++    var Wd = w0 * P.s, h = P.o * 0.9 * w0, f = P.f;
++    var pu = 2 + 3 * (1 - P.r), ql = 0.5 + 0.4 * (1 - P.r);
++    function vb(uu) { var x = uu * w0; return c0 + c1 * x + c2 * x * x - f * 0.16 * w0 * (uu * uu - 0.3); }
++    function su(uu) { return Math.sqrt(Math.max(0, 1 - Math.pow(Math.abs(uu), pu))); }
++    function sl(uu) { return Math.pow(Math.max(0, 1 - uu * uu), ql); }
++    return { Wd: Wd, h: h, vb: vb,
++             yU: function (uu) { return vb(uu) - 0.30 * h * su(uu); },
++             yL: function (uu) { return vb(uu) + 0.70 * h * sl(uu); } };
++  }
++
++  // ---------------------------------------------------------------- render
++  /** Draws into out = {width,height,data} (size st.box.w × st.box.h, straight alpha). */
++  function render(st, P, out) {
++    var W = st.box.w, H = st.box.h, d = out.data;
++    var g = geom(st, P), Wd = g.Wd, h = g.h, t0 = st.t0, w0 = st.w0;
++    var e1 = st.e1, e2 = st.e2, cx = st.c[0], cy = st.c[1], bx = st.box.x, by = st.box.y;
++    var o = P.o, tt = P.tt;
++    var cav = st.cavity, ton = st.tongue, tee = st.teeth, lin = st.line, lsh = st.lipshade;
++    var tongueA = sstep((o - 0.25) / 0.4);
++    var lowK = h > t0 * 1.2 ? sstep((h - t0 * 1.2) / (t0 * 2)) : 0, lt = 0.75 * t0;
++    var tw = 0.62 * Wd, tcy = g.vb(0) + 0.70 * h * 0.95, hh = Math.max(h, 1e-3);
++    var ringK = sstep((h - t0 * 0.3) / (t0 * 1.5)), ring = ringK > 0.004, Wr = Wd + t0 * 0.75;
++    var lipExtra = 0.35 * t0 * (1 - sstep(h / (t0 * 1.5)));
++    // per-column cache would be nicer; boxes are small (~120 px) so we keep it simple.
++    var inv = 1 / (SS * SS);
++    for (var py = 0; py < H; py++) {
++      for (var px = 0; px < W; px++) {
++        var aR = 0, aG = 0, aB = 0, aA = 0;
++        for (var sy = 0; sy < SS; sy++) for (var sx = 0; sx < SS; sx++) {
++          var X = bx + px + (sx + 0.5) / SS - cx, Y = by + py + (sy + 0.5) / SS - cy;
++          var u = X * e1[0] + Y * e1[1], v = X * e2[0] + Y * e2[1];
++          var uu = u / Wd, au = Math.abs(uu), uc = clamp(uu, -1, 1);
++          var YU = g.yU(uc), YL = g.yL(uc), r = 0, gg = 0, b = 0, a = 0, m;
++          // paint helper inlined: col = c*m + col*(1-m); a = m + a*(1-m)
++          var inside = au < 1;
++          var inCav = inside && v > YU && v < YL;
++          if (inCav) {
++            var gr = clamp((v - YU) / Math.max(YL - YU, 1e-3), 0, 1), kk = 0.75 + 0.35 * gr;
++            r = cav[0] * kk; gg = cav[1] * kk; b = cav[2] * kk; a = 1;
++            if (tongueA > 0) {
++              var ex = u / tw, ey = (v - tcy) / (0.38 * hh);
++              if (ex * ex + ey * ey < 1) { m = tongueA; r = ton[0] * m + r * (1 - m); gg = ton[1] * m + gg * (1 - m); b = ton[2] * m + b * (1 - m); }
++            }
++            if (tt > 0) {
++              var tH = o < 0.5 ? (0.16 + 0.42 * tt) * (YL - YU) : 0.18 * w0 * (0.5 + 0.5 * tt);
++              if (v < YU + tH && au < 0.88) { r = tee[0]; gg = tee[1]; b = tee[2]; }
++              if (tt > 0.8 && o < 0.5 && v > YL - 0.30 * (YL - YU) && au < 0.7) { r = tee[0] * 0.94; gg = tee[1] * 0.94; b = tee[2] * 0.94; }
++            }
++          }
++          if (lowK > 0) {
++            if (inside && v > YL - 0.25 * lt && v < YL + lt && au < 0.97) {
++              m = 0.55 * lowK; r = lin[0] * m + r * (1 - m); gg = lin[1] * m + gg * (1 - m); b = lin[2] * m + b * (1 - m); a = m + a * (1 - m);
++            }
++            if (inside) {
++              var shc = YL + lt + 0.10 * w0 * o, q1 = u / (0.45 * Wd), q2 = (v - shc) / (0.09 * w0 + 0.5);
++              m = 0.22 * lowK * Math.exp(-q1 * q1 - q2 * q2);
++              if (m > 0.004) { r = lsh[0] * m + r * (1 - m); gg = lsh[1] * m + gg * (1 - m); b = lsh[2] * m + b * (1 - m); a = m + a * (1 - m); }
++            }
++          }
++          if (ring && !inCav) {   // side walls: cavity dilated by the line weight
++            var ur = u / Wr;
++            if (Math.abs(ur) < 1) {
++              var urc = clamp(ur, -1, 1), YU2 = g.yU(urc), YL2 = g.yL(urc);
++              if (v > YU2 - t0 * 0.75 && v < YL2 + t0 * 0.5) {
++                m = (v < (YU2 + YL2) / 2 ? 1 : 0.6) * ringK;
++                r = lin[0] * m + r * (1 - m); gg = lin[1] * m + gg * (1 - m); b = lin[2] * m + b * (1 - m); a = m + a * (1 - m);
++              }
++            }
++          }
++          if (au < 1.04) {   // upper lip line (this alone is the closed mouth)
++            var taper = sstep((1.04 - au) / 0.12), tU = t0 * (0.8 + 0.5 * uc * uc) * taper;
++            if (v > YU - 0.6 * tU && v < YU + 0.4 * tU + lipExtra) { r = lin[0]; gg = lin[1]; b = lin[2]; a = 1; }
++          }
++          aR += r * a; aG += gg * a; aB += b * a; aA += a;
++        }
++        var q = (py * W + px) * 4;
++        if (aA > 0) { d[q] = aR / aA * 255; d[q + 1] = aG / aA * 255; d[q + 2] = aB / aA * 255; d[q + 3] = aA * inv * 255; }
++        else { d[q] = d[q + 1] = d[q + 2] = d[q + 3] = 0; }
++      }
++    }
++    return out;
++  }
++  function blank(st) {
++    var n = st.box.w * st.box.h * 4;
++    return { width: st.box.w, height: st.box.h, data: new Uint8ClampedArray(n) };
++  }
++
++  // ---------------------------------------------------------------- jaw
++  /** face-mesh displacement [dx,dy] at PSD point (x,y) for params P. */
++  function jaw(st, P, x, y, strength) {
++    var g = geom(st, P), drop = (strength == null ? 0.55 : strength) * 0.70 * g.h;
++    var X = x - st.c[0], Y = y - st.c[1];
++    var u = X * st.e1[0] + Y * st.e1[1], v = X * st.e2[0] + Y * st.e2[1];
++    var dv = 0, du = 0;
++    if (drop > 0 && st.faceBox) {
++      var vchin = Math.max(1, st.faceBox.y1 - st.c[1]), fw = st.faceBox.x1 - st.faceBox.x0;
++      dv = drop * sstep(v / (0.35 * vchin)) * Math.exp(-Math.pow(u / (fw * 0.38), 2));
++    }
++    var sq = (1 - P.s) * st.w0 * 0.35;
++    if (sq) du = sq * Math.tanh(u / st.w0) * Math.exp(-Math.pow(u / (st.w0 * 1.8), 2) - Math.pow(v / (st.w0 * 1.4), 2));
++    return [dv * st.e2[0] - du * st.e1[0], dv * st.e2[1] - du * st.e1[1]];
++  }
++
++  // ---------------------------------------------------------------- vowels from audio
++  // Reference (F1, F2) in Hz; mid values between adult female and male voices.
++  var REF = { a: [800, 1300], i: [330, 2500], u: [380, 1500], e: [530, 2100], o: [520, 900] };
++  /**
++   * samples: Float32Array (mono, -1..1), sr: sample rate.
++   * Returns {a,i,u,e,o, f1, f2, rms} or null when silent / unvoiced.
++   */
++  function vowelFromSamples(samples, sr, opts) {
++    var o = opts || {}, scale = o.formantScale || 1;
++    var q = Math.max(1, Math.round(sr / 11025)), fs = sr / q, n = Math.floor(samples.length / q);
++    if (n < 128) return null;
++    var x = new Float64Array(n), i, j, rms = 0;
++    for (i = 0; i < n; i++) { var s = 0; for (j = 0; j < q; j++) s += samples[i * q + j]; x[i] = s / q; rms += x[i] * x[i]; }
++    rms = Math.sqrt(rms / n);
++    if (rms < (o.gate || 0.008)) return null;
++    for (i = n - 1; i > 0; i--) x[i] -= 0.95 * x[i - 1];
++    for (i = 0; i < n; i++) x[i] *= 0.54 - 0.46 * Math.cos(2 * Math.PI * i / (n - 1));
++    var p = Math.min(16, 2 + Math.round(fs / 1000)), rr = new Float64Array(p + 1);
++    for (j = 0; j <= p; j++) { var acc = 0; for (i = j; i < n; i++) acc += x[i] * x[i - j]; rr[j] = acc; }
++    if (rr[0] <= 0) return null;
++    rr[0] *= 1.0001;
++    var a = new Float64Array(p + 1), tmp = new Float64Array(p + 1), err = rr[0];
++    a[0] = 1;
++    for (i = 1; i <= p; i++) {   // Levinson–Durbin
++      var lam = 0; for (j = 0; j < i; j++) lam -= a[j] * rr[i - j];
++      lam /= err;
++      for (j = 0; j <= i; j++) tmp[j] = a[j] + lam * a[i - j];
++      for (j = 0; j <= i; j++) a[j] = tmp[j];
++      err *= 1 - lam * lam;
++      if (err <= 0) return null;
++    }
++    // LPC envelope 0..4 kHz, peak picking
++    var NF = 200, fmax = Math.min(4000, fs / 2 - 50), env = new Float64Array(NF), peaks = [];
++    for (var k = 0; k < NF; k++) {
++      var w = 2 * Math.PI * (fmax * k / (NF - 1)) / fs, re = 0, im = 0;
++      for (j = 0; j <= p; j++) { re += a[j] * Math.cos(w * j); im -= a[j] * Math.sin(w * j); }
++      env[k] = -Math.log(re * re + im * im + 1e-12);
++    }
++    for (k = 1; k < NF - 1; k++) if (env[k] > env[k - 1] && env[k] >= env[k + 1]) peaks.push({ f: fmax * k / (NF - 1), e: env[k] });
++    var F1 = 0, F2 = 0, best = -1e9;
++    for (k = 0; k < peaks.length; k++) if (peaks[k].f >= 200 * scale && peaks[k].f <= 1100 * scale) { F1 = peaks[k].f; break; }
++    if (!F1) return null;
++    for (k = 0; k < peaks.length; k++) {   // F2 = strongest resonance above F1
++      var pk = peaks[k];
++      if (pk.f > F1 + 250 && pk.f >= 650 * scale && pk.f <= 3200 * scale && pk.e > best) { best = pk.e; F2 = pk.f; }
++    }
++    if (!F2) F2 = F1 < 600 ? 900 * scale : 1300 * scale;   // F1/F2 merged (o / a)
++    var out = { f1: F1, f2: F2, rms: rms }, tot = 0;
++    for (var v in REF) {
++      var d1 = Math.log(F1 / (REF[v][0] * scale)) / 0.25, d2 = Math.log(F2 / (REF[v][1] * scale)) / 0.20;
++      out[v] = Math.exp(-0.5 * (d1 * d1 + d2 * d2)); tot += out[v];
++    }
++    if (tot < 1e-9) return null;
++    for (v in REF) out[v] /= tot;
++    return out;
++  }
++
++  // ---------------------------------------------------------------- rig hookup
++  /**
++   * Adds a `mouth_gen` layer to a rig from Rigger.buildRig (right after the
++   * drawn mouth) when the PSD has no hand-drawn mouth_close. Sets rig.mouthGen
++   * to the analysis (or null). Idempotent. baseName: Rigger.baseName.
++   */
++  function attachToRig(rig, baseName) {
++    if ('mouthGen' in rig) return rig.mouthGen;
++    rig.mouthGen = null;
++    var bn = function (p) { return baseName(p.name.replace(/_(l|r)$/, '')); };
++    var real = rig.layers.filter(function (p) { return !p.synthetic; });
++    if (real.some(function (p) { return bn(p) === 'mouth_close'; })) return null;   // hand-drawn diffs win
++    var mo = real.filter(function (p) { return bn(p) === 'mouth_open'; })[0];
++    var face = real.filter(function (p) { return bn(p) === 'face'; })[0];
++    if (!mo || !mo.img) return null;
++    var st = null;
++    try { st = analyze(mo, face); } catch (err) { st = null; }
++    if (!st) return null;
++    var img = render(st, mix({ a: 1 }, 0, 0), blank(st));
++    rig.layers.splice(rig.layers.indexOf(mo) + 1, 0, {
++      name: 'mouth_gen', source: '', x: st.box.x, y: st.box.y, w: st.box.w, h: st.box.h,
++      z: mo.z + 0.5, depth: mo.depth, group: 'head', phys: null, opacity: 1, fade: 'mouthGen',
++      side: null, strands: null, synthetic: true, img: img });
++    rig.mouthGen = st;
++    return st;
++  }
++
++  return { analyze: analyze, attachToRig: attachToRig, render: render, blank: blank, mix: mix, jaw: jaw, geom: geom,
++           vowelFromSamples: vowelFromSamples, VOWELS: VOWELS, CLOSED: CLOSED };
++});
+diff --git a/lib/renderer.js b/lib/renderer.js
+index f26a984..e72c31e 100644
+--- a/lib/renderer.js
++++ b/lib/renderer.js
+@@ -76,6 +76,8 @@ function createRenderer(gl){
+     if(L.vboUV)gl.deleteBuffer(L.vboUV);if(L.ibo)gl.deleteBuffer(L.ibo);
+     L.tex=L.vboPos=L.vboUV=L.ibo=null;
+   }
++  // Replace a layer's pixels (same or new size). Used by the procedural mouth.
++  function updateTexture(L,image){gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,L.tex);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,image);}
+   function positions(L,data){gl.bindBuffer(gl.ARRAY_BUFFER,L.vboPos);gl.bufferSubData(gl.ARRAY_BUFFER,0,data);}
+   function bind(L){
+     gl.bindBuffer(gl.ARRAY_BUFFER,L.vboPos);gl.vertexAttribPointer(loc.pos,2,gl.FLOAT,false,0,0);
+@@ -120,7 +122,7 @@ function createRenderer(gl){
+     gl.uniform1f(loc.uUseMask,0);
+   }
+   init();
+-  return {init,upload,dispose,positions,draw,texture};
++  return {init,upload,dispose,positions,updateTexture,draw,texture};
+ }
+ root.RigRenderer={create:createRenderer};
+ })(typeof self!=='undefined'?self:this);
+diff --git a/lib/rigger.js b/lib/rigger.js
+index 579d550..c325e02 100644
+--- a/lib/rigger.js
++++ b/lib/rigger.js
+@@ -149,6 +149,7 @@
+   };
+   // Human readable role names used by the editor and diagnostics.
+   var ROLE_LABELS = {
++    'mouth_gen': '自動生成口',
+     'wings': '翼', 'tail': '尻尾', 'back hair': '後髪', 'footwear': '靴', 'legwear': '脚',
+     'bottomwear': '下半身の服', 'neck': '首', 'topwear': '上半身の服', 'neckwear': '首元',
+     'handwear': '腕・手', 'objects': '小物', 'earwear': '耳飾り', 'ears': '耳', 'face': '顔',
+diff --git a/lib/runtime.js b/lib/runtime.js
+index 2f92839..e7d66df 100644
+--- a/lib/runtime.js
++++ b/lib/runtime.js
+@@ -45,7 +45,7 @@
+ 
+   // ---- face tracking relay ----
+   const trackingKeys={ax:[-1,1],ay:[-1,1],az:[-1,1],eL:[0,1],eR:[0,1],mo:[0,1],ex:[-1,1],ey:[-1,1]};
+-  const optionalTrackingKeys={br:[-1,1],mf:[-1,1],mic:[0,1]};
++  const optionalTrackingKeys={br:[-1,1],mf:[-1,1],mic:[0,1],va:[0,1],vi:[0,1],vu:[0,1],ve:[0,1],vo:[0,1]};
+   function tracking(value) {
+     if(!value || typeof value!=='object' || typeof value.live!=='boolean') return null;
+     const out={live:value.live};
+diff --git a/obs_server.py b/obs_server.py
+index 7005ef1..168fcab 100644
+--- a/obs_server.py
++++ b/obs_server.py
+@@ -25,7 +25,8 @@ MAX_MODEL_BYTES = 128 * 1024 * 1024
+ MAX_CLIENTS = 16
+ RANGES = {key: (-1, 1) for key in ('ax', 'ay', 'az', 'ex', 'ey')}
+ RANGES.update({key: (0, 1) for key in ('eL', 'eR', 'mo')})
+-OPTIONAL_RANGES = {'br': (-1, 1), 'mf': (-1, 1), 'mic': (0, 1)}
++OPTIONAL_RANGES = {'br': (-1, 1), 'mf': (-1, 1), 'mic': (0, 1),
++                   'va': (0, 1), 'vi': (0, 1), 'vu': (0, 1), 've': (0, 1), 'vo': (0, 1)}
+ MODEL_ID = re.compile(r'^[0-9a-f]{1,16}-[0-9a-f]{1,8}-[0-9a-f]{1,8}$')
+ 
+ for ext, mime in {'.wasm': 'application/wasm', '.data': 'application/octet-stream',
+diff --git a/package.json b/package.json
+index ffe4922..63e5112 100644
+--- a/package.json
++++ b/package.json
+@@ -1,13 +1,13 @@
+ {
+   "name": "anime25drig",
+-  "version": "2.0.0",
++  "version": "2.1.0",
+   "private": true,
+   "description": "パーツ分けPSDをドロップするだけで動く2.5Dアバターツール",
+   "license": "MIT",
+   "scripts": {
+     "start": "python obs_server.py --port 8000",
+     "test": "npm run test:node && npm run test:python",
+-    "test:node": "node tests/rigger.test.js && node tests/runtime.test.js && node tests/face-features.test.js && node tests/psd.test.js",
++    "test:node": "node tests/rigger.test.js && node tests/runtime.test.js && node tests/face-features.test.js && node tests/psd.test.js && node tests/mouthgen.test.js",
+     "test:python": "python -m unittest discover -s tests -p \"test_*.py\"",
+     "test:browser": "node tests/run-browser.js"
+   },
+diff --git a/tests/mouthgen.test.js b/tests/mouthgen.test.js
+new file mode 100644
+index 0000000..8c4230e
+--- /dev/null
++++ b/tests/mouthgen.test.js
+@@ -0,0 +1,82 @@
++'use strict';
++// Procedural mouth: analysis, five vowel shapes, continuity, jaw, vowel estimate, rig hookup.
++// Optional: MOUTHGEN_PSD=path/to/see-through.psd also runs the full worker import on a real PSD.
++const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
++const MG=require('../lib/mouthgen.js'),R=require('../lib/rigger.js');
++
++// --- synthetic see-through-like parts: skin face + a thin closed mouth line ---
++function part(x,y,w,h,fn){const d=new Uint8ClampedArray(w*h*4);for(let j=0;j<h;j++)for(let i=0;i<w;i++){const c=fn(i,j),q=(j*w+i)*4;d[q]=c[0];d[q+1]=c[1];d[q+2]=c[2];d[q+3]=c[3];}return {x,y,w,h,img:{width:w,height:h,data:d}};}
++const SKIN=[235,200,185,255];
++const face=part(100,60,200,240,()=>SKIN);
++const mouth=part(176,226,48,10,(i,j)=>{const yc=4+0.004*(i-24)*(i-24);return Math.abs(j-yc)<1.1?[90,40,40,255]:[0,0,0,0];});
++const st=MG.analyze(mouth,face);
++assert.ok(st,'analysis');
++assert.ok(Math.abs(st.c[0]-200)<2&&Math.abs(st.c[1]-230.5)<3,'centre '+st.c);
++assert.ok(st.w0>20&&st.w0<26,'half width '+st.w0);
++assert.equal(st.origOpen,false,'a line is a closed mouth');
++assert.ok(Math.abs(st.th)<0.1,'tilt');
++
++function mask(P){const img=MG.render(st,P,MG.blank(st));const m=new Uint8Array(st.box.w*st.box.h);let n=0;for(let k=0;k<m.length;k++){m[k]=img.data[k*4+3]>90?1:0;n+=m[k];}return {m,n,img};}
++function extent(m){let x0=1e9,x1=-1,y0=1e9,y1=-1;for(let j=0;j<st.box.h;j++)for(let i=0;i<st.box.w;i++)if(m[j*st.box.w+i]){x0=Math.min(x0,i);x1=Math.max(x1,i);y0=Math.min(y0,j);y1=Math.max(y1,j);}return {w:x1-x0+1,h:y1-y0+1};}
++function iou(a,b){let i=0,u=0;for(let k=0;k<a.length;k++){i+=a[k]&b[k];u+=a[k]|b[k];}return i/Math.max(1,u);}
++const S={closed:mask(MG.mix({a:1},0,0))};
++for(const v of ['a','i','u','e','o'])S[v]=mask(MG.mix({[v]:1},1,0));
++const keys=['closed','a','i','u','o'];let worst=0,pair='';   // the five acceptance states (E sits between A and I by design)
++for(let a=0;a<keys.length;a++)for(let b=a+1;b<keys.length;b++){const v=iou(S[keys[a]].m,S[keys[b]].m);if(v>worst){worst=v;pair=keys[a]+'/'+keys[b];}}
++assert.ok(worst<=0.6,'shapes must be distinct (max pair IoU '+worst.toFixed(2)+' '+pair+')');
++const eA=extent(S.a.m),eI=extent(S.i.m),eU=extent(S.u.m);
++assert.ok(eA.h/eA.w>=0.35,'A opens wide: '+(eA.h/eA.w).toFixed(2));
++assert.ok(eI.w/eU.w>=1.6,'I is wider than U: '+(eI.w/eU.w).toFixed(2));
++// teeth on I: bright pixels inside
++let bright=0;for(let k=0;k<S.i.m.length;k++)if(S.i.m[k]&&S.i.img.data[k*4]>220)bright++;
++assert.ok(bright>10,'I shows teeth');
++// continuity: closed→A in 30 steps without a jump
++let prev=null,diffs=[];
++for(let s=0;s<=30;s++){const {img}=mask(MG.mix({a:1},s/30,0));if(prev){let d=0;for(let k=0;k<img.data.length;k+=4)d+=Math.abs(img.data[k+3]-prev[k+3]);diffs.push(d);}prev=img.data.slice();}
++const sorted=diffs.slice().sort((a,b)=>a-b),med=sorted[sorted.length>>1];
++assert.ok(Math.max(...diffs)/Math.max(1,med)<=3,'no pop while opening');
++// jaw moves the chin down on A, nothing when closed
++const chin=[200,295];
++assert.ok(MG.jaw(st,MG.mix({a:1},1,0),...chin)[1]>2,'jaw drops');
++assert.equal(MG.jaw(st,MG.mix({a:1},0,0),...chin)[1],0);
++assert.ok(Math.abs(MG.jaw(st,MG.mix({a:1},1,0),200,150)[1])<0.01,'forehead stays');
++// mix: vowel interpolation is in parameter space
++const half=MG.mix({a:0.5,u:0.5},1,0);
++assert.ok(Math.abs(half.s-(MG.VOWELS.a.s+MG.VOWELS.u.s)/2)<1e-9);
++
++// --- vowel estimate on synthetic two-formant vowels ---
++function vowelWave(f1,f2,sr=48000,N=1024,f0=220){
++  const x=new Float32Array(N);let y1=[0,0],y2=[0,0];
++  const res=(f,bw)=>{const r=Math.exp(-Math.PI*bw/sr);return [2*r*Math.cos(2*Math.PI*f/sr),-r*r];};
++  const [a1,b1]=res(f1,80),[a2,b2]=res(f2,120);
++  for(let n=0;n<N;n++){const e=n%Math.round(sr/f0)===0?1:0,s1=e+a1*y1[0]+b1*y1[1];y1=[s1,y1[0]];const s2=s1+a2*y2[0]+b2*y2[1];y2=[s2,y2[0]];x[n]=s2;}
++  let m=0;for(const s of x)m=Math.max(m,Math.abs(s));for(let n=0;n<N;n++)x[n]*=0.3/m;return x;
++}
++const top=r=>['a','i','u','e','o'].sort((p,q)=>r[q]-r[p])[0];
++for(const [v,f] of Object.entries({a:[800,1250],i:[300,2600],u:[350,1450],e:[500,2050],o:[480,850]}))
++  assert.equal(top(MG.vowelFromSamples(vowelWave(...f),48000)),v,'vowel '+v);
++assert.equal(MG.vowelFromSamples(new Float32Array(1024),48000),null,'silence');
++
++// --- rig hookup ---
++const rig={layers:[Object.assign({name:'face',z:0,depth:1,synthetic:false},face),Object.assign({name:'mouth_open',z:1,depth:1.08,fade:'mouthOpen'},mouth),{name:'mouth_close',z:2,synthetic:true,img:{width:1,height:1,data:new Uint8ClampedArray(4)},x:0,y:0,w:1,h:1}]};
++MG.attachToRig(rig,R.baseName);
++assert.ok(rig.mouthGen);
++assert.equal(rig.layers[2].name,'mouth_gen');assert.equal(rig.layers[2].z,1.5);
++assert.equal(rig.layers[2].img.data.length,rig.layers[2].w*rig.layers[2].h*4);
++MG.attachToRig(rig,R.baseName);assert.equal(rig.layers.filter(l=>l.name==='mouth_gen').length,1,'idempotent');
++const drawn={layers:[{name:'mouth_open',img:mouth.img,x:0,y:0},{name:'mouth_close',img:mouth.img,x:0,y:0}]};
++assert.equal(MG.attachToRig(drawn,R.baseName),null,'hand-drawn mouth_close keeps the old behaviour');
++
++// --- optional: a real see-through PSD ---
++if(process.env.MOUTHGEN_PSD){
++  const vm=require('node:vm'),ag=require('../lib/ag-psd.min.js'),GP=require('../lib/genericparts.js');
++  ag.initializeCanvas(undefined,(width,height)=>({width,height,data:new Uint8ClampedArray(width*height*4)}));
++  const messages=[],scope={agPsd:ag,Rigger:R,RigRuntime:require('../lib/runtime.js'),Uint8Array,Uint8ClampedArray,ArrayBuffer,Set,importScripts(){},postMessage(m){messages.push(m);}};
++  vm.createContext(scope);vm.runInContext(fs.readFileSync(path.join(__dirname,'..','lib/psd-worker.js'),'utf8'),scope);
++  const bytes=fs.readFileSync(process.env.MOUTHGEN_PSD);
++  scope.onmessage({data:{buffer:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength),generic:{eyeL:GP.get('eyeL'),eyeR:GP.get('eyeR'),mouth:GP.get('mouth')}}});
++  const res=messages.at(-1);assert.ok(!res.error,res.error);
++  const st2=MG.attachToRig(res.rig,R.baseName);assert.ok(st2,'real PSD mouth analysed');
++  console.log('real PSD: w0='+st2.w0.toFixed(1)+' tilt='+(st2.th*180/Math.PI).toFixed(1)+'° drawnOpen='+st2.origOpen);
++}
++console.log('mouthgen tests: analysis, 5 vowel shapes (max IoU '+worst.toFixed(2)+'), continuity, jaw, vowel estimate, rig hookup passed');
+diff --git a/tools/mouth-proto/make_grid.py b/tools/mouth-proto/make_grid.py
+new file mode 100644
+index 0000000..5ae2ec1
+--- /dev/null
++++ b/tools/mouth-proto/make_grid.py
+@@ -0,0 +1,55 @@
++import os
++import sys, json, numpy as np
++from PIL import Image, ImageDraw, ImageFont
++sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
++from mouthgen import *
++
++HERE = os.path.dirname(os.path.abspath(__file__))
++ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))
++OUT = os.environ.get('OUT', os.path.join(HERE, 'out'))
++JS = os.path.join(ROOT, 'lib', 'genericparts.js')
++CASES = {os.path.splitext(os.path.basename(p))[0]: p for p in sys.argv[1:]}
++os.makedirs(OUT, exist_ok=True)
++FONT = None
++for f in [os.environ.get('CJK_FONT', 'C:/Windows/Fonts/msyh.ttc'), '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc', '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc']:
++    try: FONT = ImageFont.truetype(f, 22); break
++    except Exception: pass
++if FONT is None: FONT = ImageFont.load_default()
++
++def crop(img, an, scale=3):
++    c = an['c']; w0 = an['w0']; R = int(w0 * 2.6)
++    x0, y0 = int(c[0] - R), int(c[1] - R * 0.8)
++    x1, y1 = int(c[0] + R), int(c[1] + R * 1.2)
++    im = Image.fromarray(to_u8(img[y0:y1, x0:x1]))
++    return im.resize((im.width * scale // 1, im.height * scale // 1), Image.LANCZOS)
++
++def run(name, path):
++    W, H, layers = load_psd(path)
++    mouth = next(L for L in layers if L['name'] == 'mouth')['img']
++    face = next(L for L in layers if L['name'] == 'face')['img']
++    an = analyze(mouth, face)
++    iou, Pfit = fit_original(an, mouth, H, W)
++    an['fit_iou'] = float(iou); an['fit_P'] = {k: float(v) for k, v in Pfit.items()}
++    B = baseline_setup(W, H, layers, JS)
++    orig = composite(W, H, layers)
++    base_levels = [0, 0.25, 0.5, 0.75, 1.0]
++    base = [frame_baseline(W, H, layers, B, m) for m in base_levels]
++    names = ['闭', 'A', 'I', 'U', 'O']
++    ours = [frame_ours(W, H, layers, an, PRESETS[n]) for n in names]
++    fitf = frame_ours(W, H, layers, an, Pfit, orig_closed_keep=False)
++    tiles_b = [crop(x, an) for x in base]; tiles_o = [crop(x, an) for x in ours]
++    tw, th = tiles_b[0].size
++    G = Image.new('RGB', (tw * 6 + 70, th * 2 + 90), 'white')
++    d = ImageDraw.Draw(G)
++    G.paste(crop(orig, an), (0, 40)); d.text((10, 8), '原图', fill='black', font=FONT)
++    G.paste(crop(fitf, an), (0, th + 80)); d.text((10, th + 48), f'参数化拟合原图 IoU={iou:.2f}', fill='black', font=FONT)
++    for i in range(5):
++        x = (i + 1) * (tw + 12) + 10
++        G.paste(tiles_b[i], (x, 40)); d.text((x + 6, 8), f'现状 mouthOpen={base_levels[i]}', fill=(170, 0, 0), font=FONT)
++        G.paste(tiles_o[i], (x, th + 80)); d.text((x + 6, th + 48), f'新方案 {names[i]}', fill=(0, 110, 0), font=FONT)
++    G.save(f'{OUT}/grid_{name}.png')
++    json.dump(an, open(f'{OUT}/analysis_{name}.json', 'w'), ensure_ascii=False, indent=1)
++    print(name, json.dumps({k: an[k] for k in ['w0', 't0', 'th', 'orig_open', 'fit_iou']}))
++
++for k, p in CASES.items():
++    run(k, p)
+diff --git a/tools/mouth-proto/make_video_metrics.py b/tools/mouth-proto/make_video_metrics.py
+new file mode 100644
+index 0000000..354ebe6
+--- /dev/null
++++ b/tools/mouth-proto/make_video_metrics.py
+@@ -0,0 +1,148 @@
++"""对比视频 + 可量化验收。用法: python make_video_metrics.py"""
++import os, sys, json, subprocess, numpy as np
++from PIL import Image, ImageDraw, ImageFont
++sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
++import mouthgen as MG
++from mouthgen import *
++
++HERE = os.path.dirname(os.path.abspath(__file__))
++ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))
++OUT = os.environ.get('OUT', os.path.join(HERE, 'out'))
++JS = os.path.join(ROOT, 'lib', 'genericparts.js')
++CASES = {os.path.splitext(os.path.basename(p))[0]: p for p in sys.argv[1:]}
++os.makedirs(OUT, exist_ok=True)
++FONT = None
++for _f in [os.environ.get('CJK_FONT', ''), 'C:/Windows/Fonts/msyh.ttc', 'C:/Windows/Fonts/meiryo.ttc', '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc']:
++    try: FONT = ImageFont.truetype(_f, 26); break
++    except Exception: pass
++if FONT is None: FONT = ImageFont.load_default()
++FPS = 30
++MG.PRESETS['U'] = dict(o=0.38, s=0.58, r=1.0, f=-0.1, tt=0.0)
++
++def crop_layers(W, H, layers, roi):
++    x0, y0, x1, y1 = roi
++    out = []
++    for L in layers:
++        b = L['bbox']
++        out.append({'name': L['name'], 'img': L['img'][y0:y1, x0:x1].copy(),
++                    'bbox': (b[0] - x0, b[1] - y0, b[2] - x0, b[3] - y0)})
++    return x1 - x0, y1 - y0, out
++
++def mouth_mask(frame, ref, roi_c, R):
++    cx, cy = int(roi_c[0]), int(roi_c[1])
++    d = np.abs(frame[..., :3] - ref[..., :3]).sum(2)
++    m = np.zeros(d.shape, bool)
++    sl = (slice(max(0, cy - R), cy + R), slice(max(0, cx - R), cx + R))
++    m[sl] = d[sl] > 0.10
++    return m
++
++def local_extent(mask, an):
++    ys, xs = np.nonzero(mask)
++    if len(xs) == 0: return 0, 0
++    c = np.array(an['c']); e1 = np.array(an['e1']); e2 = np.array(an['e2'])
++    u = (xs - c[0]) * e1[0] + (ys - c[1]) * e1[1]; v = (xs - c[0]) * e2[0] + (ys - c[1]) * e2[1]
++    return float(np.ptp(u)), float(np.ptp(v))
++
++def iou(a, b):
++    return float((a & b).sum() / max(1, (a | b).sum()))
++
++SEQ = [('闭', .40), ('A', .35), ('闭', .12), ('I', .35), ('U', .35), ('E', .35), ('O', .35), ('闭', .30),
++       ('A', .22), ('A', .22), ('O', .30), ('E', .30), ('闭', .45)]
++LYRIC = ['', 'a', '', 'i', 'u', 'e', 'o', '', 'ka', 'ra', 'o', 'ke', '']
++
++def track(t):
++    tt = 0; prev = MG.PRESETS['闭']; lab = ''
++    for (k, d), ly in zip(SEQ, LYRIC):
++        if t < tt + d:
++            cur = MG.PRESETS[k]
++            w = float(MG._sstep((t - tt) / 0.09))
++            return {p: prev[p] * (1 - w) + cur[p] * w for p in cur}, k, ly
++        prev = MG.PRESETS[k]; tt += d
++    return dict(MG.PRESETS['闭']), '闭', ''
++
++def label(img, text, col):
++    im = Image.fromarray(MG.to_u8(img)); d = ImageDraw.Draw(im)
++    d.rectangle((0, 0, im.width, 38), fill=(255, 255, 255)); d.text((10, 4), text, fill=col, font=FONT)
++    return im
++
++def run(name, path):
++    W, H, layers = load_psd(path)
++    face = next(L for L in layers if L['name'] == 'face')
++    fb = face['bbox']
++    fw, fh = fb[2] - fb[0], fb[3] - fb[1]
++    roi = (max(0, fb[0] - fw // 6), max(0, fb[1] + fh // 4), min(W, fb[2] + fw // 6), min(H, fb[3] + fh // 6))
++    W, H, layers = crop_layers(W, H, layers, roi)
++    mouth = next(L for L in layers if L['name'] == 'mouth')['img']
++    face = next(L for L in layers if L['name'] == 'face')
++    an = analyze(mouth, face['img'])
++    B = baseline_setup(W, H, layers, JS)
++    nomouth = composite(W, H, [L for L in layers if L['name'] != 'mouth'])
++    R = int(an['w0'] * 2.2)
++    # ---------- metrics ----------
++    names = ['闭', 'A', 'I', 'U', 'O']; lv = [0, .25, .5, .75, 1.0]
++    fo = {n: frame_ours(W, H, layers, an, MG.PRESETS[n]) for n in names}
++    fbs = {m: frame_baseline(W, H, layers, B, m) for m in lv}
++    def nm_ours(P):
++        return composite(W, H, [dict(L, img=jaw_warp(L['img'], an, P, face['bbox'])) if L['name'] == 'face' else L
++                                for L in layers if L['name'] != 'mouth'])
++    def nm_base(m):
++        return frame_baseline(W, H, [L for L in layers if L['name'] != 'mouth'], B, m)
++    mo = {n: mouth_mask(fo[n], nm_ours(MG.PRESETS[n]), an['c'], R) for n in names}
++    mb = {m: mouth_mask(fbs[m], nm_base(m), an['c'], R) for m in lv}
++    def pairmax(ms):
++        ks = list(ms); return max(iou(ms[a], ms[b]) for i, a in enumerate(ks) for b in ks[i + 1:])
++    ext_o = {n: local_extent(mo[n], an) for n in names}
++    ext_b = {m: local_extent(mb[m], an) for m in lv}
++    # continuity: 30 帧线性扫 0→1
++    def popratio(frames):
++        ds = [np.abs(frames[i + 1][..., :3] - frames[i][..., :3]).mean() for i in range(len(frames) - 1)]
++        ds = np.array(ds); return float(ds.max() / max(1e-9, np.median(ds))), ds
++    ramp = np.linspace(0, 1, 31)
++    pr_b, _ = popratio([frame_baseline(W, H, layers, B, m) for m in ramp])
++    lerp = lambda a, b, w: {p: a[p] * (1 - w) + b[p] * w for p in a}
++    pr_o, _ = popratio([frame_ours(W, H, layers, an, lerp(MG.PRESETS['闭'], MG.PRESETS['A'], w), orig_closed_keep=False) for w in ramp])
++    iou_fit, _ = fit_original(an, mouth, H, W)
++    # jaw: chin displacement at full open (face alpha lowest row at mouth column)
++    col = int(an['c'][0])
++    def chin(img): return np.nonzero(img[:, col, 3] > 0.5)[0].max()
++    chin_o = chin(jaw_warp(face['img'], an, MG.PRESETS['A'], face['bbox'])) - chin(face['img'])
++    chin_b = round(1.0 * 6 * B['FS'], 1)
++    met = dict(
++        distinct_max_pair_iou=dict(baseline=pairmax(mb), ours=pairmax(mo), target='≤0.60'),
++        open_ratio_A=dict(baseline=ext_b[1.0][1] / max(1, ext_b[1.0][0]), ours=ext_o['A'][1] / max(1, ext_o['A'][0]), target='≥0.35'),
++        width_ratio_I_over_U=dict(baseline=max(e[0] for e in ext_b.values()) / max(1, min(e[0] for e in ext_b.values())),
++                                  ours=ext_o['I'][0] / max(1, ext_o['U'][0]), target='≥1.6'),
++        pop_ratio_0to1=dict(baseline=pr_b, ours=pr_o, target='≤3.0'),
++        style_fit_iou=dict(ours=float(iou_fit), target='≥0.80'),
++        chin_drop_px_at_A=dict(baseline=chin_b, ours=int(chin_o), target='≥0.25×w0=%.1f' % (0.25 * an['w0'])),
++        independent_mouth_params=dict(baseline=1, ours=5, target='≥4'),
++    )
++    for k, v in met.items():
++        for kk in ('baseline', 'ours'):
++            if kk in v and isinstance(v[kk], float): v[kk] = round(v[kk], 3)
++    json.dump(met, open(f'{OUT}/metrics_{name}.json', 'w'), ensure_ascii=False, indent=1)
++    print(name, json.dumps(met, ensure_ascii=False))
++    if os.environ.get('NOVIDEO'): return met
++    # ---------- video ----------
++    fdir = f'{OUT}/frames_{name}'; os.makedirs(fdir, exist_ok=True)
++    T = sum(d for _, d in SEQ); n = int(T * FPS)
++    for i in range(n):
++        t = i / FPS
++        P, k, ly = track(t)
++        a = frame_baseline(W, H, layers, B, P['o'])
++        b = frame_ours(W, H, layers, an, P)
++        A_ = label(a, f'现状 Anime2.5DRig  open={P["o"]:.2f}', (170, 0, 0))
++        B_ = label(b, f'新方案  [{k}] {ly}', (0, 110, 0))
++        canvas = Image.new('RGB', (A_.width * 2 + 10, A_.height), 'white')
++        canvas.paste(A_, (0, 0)); canvas.paste(B_, (A_.width + 10, 0))
++        if canvas.width % 2: canvas = canvas.crop((0, 0, canvas.width - 1, canvas.height))
++        if canvas.height % 2: canvas = canvas.crop((0, 0, canvas.width, canvas.height - 1))
++        canvas.save(f'{fdir}/{i:04d}.png')
++    subprocess.run(['ffmpeg', '-y', '-loglevel', 'error', '-framerate', str(FPS), '-i', f'{fdir}/%04d.png',
++                    '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '18',
++                    f'{OUT}/compare_{name}.mp4'], check=True)
++    return met
++
++if __name__ == '__main__':
++    allm = {k: run(k, p) for k, p in CASES.items()}
++    json.dump(allm, open(f'{OUT}/metrics_all.json', 'w'), ensure_ascii=False, indent=1)
+diff --git a/tools/mouth-proto/mouthgen.py b/tools/mouth-proto/mouthgen.py
+new file mode 100644
+index 0000000..a359210
+--- /dev/null
++++ b/tools/mouth-proto/mouthgen.py
+@@ -0,0 +1,339 @@
++"""
++mouthgen.py — 从 see-through PSD 的 `mouth` 层自动生成参数化嘴型（闭/A/I/U/O/E），
++并提供 Anime2.5DRig 现行口型逻辑的复刻（baseline）用于对比。
++
++无任何按图硬编码坐标：所有几何/颜色都从 mouth 层 + face 层自动测量。
++参数：open(0..1) width(s) round(r) form(f, 笑-1..1) teeth(tt) ；jaw 联动在 face 层做位移场。
++"""
++import numpy as np, cv2, json, sys, os
++from PIL import Image
++from psd_tools import PSDImage
++from scipy import ndimage as ndi
++
++SS = 4  # supersampling
++
++# ---------------------------------------------------------------- PSD
++def load_psd(path):
++    p = PSDImage.open(path)
++    W, H = p.width, p.height
++    layers = []
++    for l in p.descendants():
++        if l.kind != 'pixel' or not l.visible:
++            continue
++        im = np.array(l.topil().convert('RGBA')).astype(np.float32) / 255.
++        full = np.zeros((H, W, 4), np.float32)
++        x0, y0, x1, y1 = l.bbox
++        full[y0:y1, x0:x1] = im[:y1 - y0, :x1 - x0]
++        layers.append({'name': l.name, 'img': full, 'bbox': l.bbox})
++    return W, H, layers
++
++def over(dst, src):
++    a = src[..., 3:4]
++    out = dst.copy()
++    out[..., :3] = src[..., :3] * a + dst[..., :3] * (1 - a)
++    out[..., 3:4] = a + dst[..., 3:4] * (1 - a)
++    # un-premultiply-safe approximation (dst usually opaque bg)
++    return out
++
++def composite(W, H, layers, bg=(1, 1, 1)):
++    out = np.zeros((H, W, 4), np.float32); out[..., :3] = bg; out[..., 3] = 1
++    for L in layers:
++        out = over(out, L['img'])
++    return out
++
++def lum(rgb):
++    return rgb[..., 0] * .299 + rgb[..., 1] * .587 + rgb[..., 2] * .114
++
++# ---------------------------------------------------------------- analysis
++def analyze(mouth, face):
++    a = mouth[..., 3]
++    ys, xs = np.nonzero(a > 0.25)
++    w = a[ys, xs]
++    c = np.array([np.average(xs, weights=w), np.average(ys, weights=w)])
++    P = np.stack([xs - c[0], ys - c[1]], 1)
++    cov = (P * w[:, None]).T @ P / w.sum()
++    ev, evec = np.linalg.eigh(cov)
++    e1 = evec[:, 1]
++    if e1[0] < 0: e1 = -e1
++    th = float(np.arctan2(e1[1], e1[0]))
++    e2 = np.array([-e1[1], e1[0]])  # "down" in local frame (y image down)
++    if e2[1] < 0: e2 = -e2
++    u = P @ e1; v = P @ e2
++    umid = (np.percentile(u, 99.5) + np.percentile(u, 0.5)) / 2
++    c = c + e1 * umid; u = u - umid
++    w0 = (np.percentile(u, 99.5) - np.percentile(u, 0.5)) / 2
++
++    rgb = mouth[ys, xs, :3]; L = lum(rgb)
++    # skin: ring around mouth on face layer
++    H, W = a.shape
++    yy, xx = np.mgrid[0:H, 0:W]
++    dd = np.hypot(xx - c[0], (yy - c[1]) * 1.6)
++    ring = (dd > w0 * 1.3) & (dd < w0 * 2.2) & (face[..., 3] > 0.9)
++    skin = face[ring][:, :3].mean(0)
++    sl = lum(skin)
++    Lmin = np.percentile(L, 2)
++    dk = np.clip((sl * 0.92 - L) / max(1e-3, sl * 0.92 - Lmin), 0, 1) * w   # 墨线权重
++    dark = dk > 0.35
++    line_col = (rgb * (dk ** 3)[:, None]).sum(0) / max(1e-6, (dk ** 3).sum())
++    t0 = float(np.clip(dk.sum() / (2 * w0), max(1.0, 0.055 * w0), w0 * 0.2))
++    ud, vd, wd = u[dark], v[dark], dk[dark]
++    nb = max(8, int(w0 / 2))
++    bins = np.linspace(-w0, w0, nb + 1)
++    cu, cv = [], []
++    for i in range(nb):
++        m = (ud >= bins[i]) & (ud < bins[i + 1])
++        if m.sum() < 1: continue
++        vv = vd[m]; ww = wd[m]
++        top = vv <= np.percentile(vv, 60)
++        cu.append((bins[i] + bins[i + 1]) / 2); cv.append(np.average(vv[top], weights=ww[top]))
++    cu, cv = np.array(cu), np.array(cv)
++    coef = np.polyfit(cu, cv, 2) if len(cu) >= 3 else np.array([0, 0, cv.mean()])
++    # 原图是否张嘴：嘴内像素 = 与肤色明显不同、且不是墨线（牙更亮 / 口腔更暗红）
++    diff = np.abs(rgb - skin).sum(1)
++    interior = (~dark) & (w > 0.5) & (diff > 0.12) & ((L > sl * 1.0) | (L < sl * 0.8))
++    inter_frac = float(interior.sum() / max(1, (w > 0.5).sum()))
++    ext = v[(np.abs(u) < w0 * 0.25) & (w > 0.5) & (diff > 0.12)]
++    h_center = float(ext.max() - ext.min()) if len(ext) else 0
++    orig_open = inter_frac > 0.15 and h_center > 2.5 * t0
++    if orig_open:
++        bright = interior & (L >= np.percentile(L[interior], 70))
++        teeth = rgb[bright].mean(0)
++    else:
++        teeth = 0.85 * np.array([1, 1, 1]) + 0.15 * skin
++    teeth = np.clip(teeth * 0.6 + np.array([0.97, 0.95, 0.94]) * 0.4, 0, 1)
++    deep = np.array([0.42, 0.10, 0.14])
++    cavity = line_col * 0.45 + deep * 0.55
++    tongue = np.array([0.86, 0.45, 0.47]) * 0.75 + skin * 0.25
++    lipshade = skin * np.array([0.90, 0.80, 0.80])
++    return dict(c=c.tolist(), th=th, e1=e1.tolist(), e2=e2.tolist(), w0=float(w0),
++                coef=coef.tolist(), t0=t0, line=line_col.tolist(), skin=skin.tolist(),
++                teeth=teeth.tolist(), cavity=cavity.tolist(), tongue=tongue.tolist(),
++                lipshade=lipshade.tolist(), orig_open=bool(orig_open),
++                h_center=h_center, inter_frac=inter_frac)
++
++# ---------------------------------------------------------------- param model
++PRESETS = {
++    #       open  width round form  teeth
++    '闭': dict(o=0.00, s=1.00, r=0.0, f=0.0, tt=0.0),
++    'A':  dict(o=1.00, s=1.00, r=0.35, f=0.0, tt=0.55),
++    'I':  dict(o=0.34, s=1.18, r=0.0, f=0.35, tt=1.0),
++    'U':  dict(o=0.38, s=0.58, r=1.0, f=-0.1, tt=0.0),
++    'E':  dict(o=0.55, s=1.10, r=0.15, f=0.2, tt=0.7),
++    'O':  dict(o=0.72, s=0.70, r=1.0, f=-0.1, tt=0.25),
++}
++
++def _sstep(x):
++    x = np.clip(x, 0, 1); return x * x * (3 - 2 * x)
++
++def mouth_geom(an, P):
++    w0 = an['w0']; a2, a1, a0 = an['coef']
++    W = w0 * P['s']
++    h = P['o'] * 0.9 * w0
++    def vb(uu):
++        x = uu * w0
++        return a0 + a1 * x + a2 * x * x - P['f'] * 0.16 * w0 * (uu * uu - 0.3)
++    pu = 2 + 3 * (1 - P['r'])
++    ql = 0.5 + 0.4 * (1 - P['r'])
++    def su(uu): return np.power(np.clip(1 - np.abs(uu) ** pu, 0, 1), 0.5)
++    def sl(uu): return np.power(np.clip(1 - np.abs(uu) ** 2, 0, 1), ql)
++    yU = lambda uu: vb(uu) - 0.30 * h * su(uu)
++    yL = lambda uu: vb(uu) + 0.70 * h * sl(uu)
++    return W, h, vb, yU, yL
++
++def render_mouth(an, P, H, W_img, pad=None):
++    """returns full-canvas RGBA float, plus roi box"""
++    w0 = an['w0']; c = np.array(an['c']); e1 = np.array(an['e1']); e2 = np.array(an['e2'])
++    R = int(w0 * 1.9) + 6
++    x0, x1 = int(c[0] - R), int(c[0] + R); y0, y1 = int(c[1] - R), int(c[1] + R)
++    n_x, n_y = (x1 - x0) * SS, (y1 - y0) * SS
++    gx = x0 + (np.arange(n_x) + 0.5) / SS; gy = y0 + (np.arange(n_y) + 0.5) / SS
++    X, Y = np.meshgrid(gx, gy)
++    dx, dy = X - c[0], Y - c[1]
++    u = dx * e1[0] + dy * e1[1]; v = dx * e2[0] + dy * e2[1]
++    Wd, h, vb, yU, yL = mouth_geom(an, P)
++    uu = u / Wd
++    inside = np.abs(uu) < 1
++    uuc = np.clip(uu, -1, 1)
++    YU, YL, VB = yU(uuc), yL(uuc), vb(uuc)
++    t0 = an['t0']
++    cav = inside & (v > YU) & (v < YL)
++    out = np.zeros((n_y, n_x, 4), np.float32)
++    def paint(mask, col, alpha=1.0):
++        m = mask.astype(np.float32) * alpha
++        if np.ndim(col) == 1: col = np.broadcast_to(np.array(col, np.float32), out[..., :3].shape)
++        out[..., :3] = col * m[..., None] + out[..., :3] * (1 - m[..., None])
++        out[..., 3] = m + out[..., 3] * (1 - m)
++    hh = max(h, 1e-3)
++    if cav.any():
++        # cavity with vertical gradient (darker at top)
++        g = np.clip((v - YU) / np.maximum(YL - YU, 1e-3), 0, 1)[..., None]
++        cc = np.array(an['cavity']) * (0.75 + 0.35 * g)
++        paint(cav, cc)
++        # tongue
++        tw = 0.62 * Wd; tcy = YL.max() if False else vb(0) + 0.70 * h * 0.95
++        tong = cav & ((u / tw) ** 2 + ((v - tcy) / (0.38 * hh)) ** 2 < 1)
++        paint(tong, an['tongue'], float(_sstep((P['o'] - 0.25) / 0.4)))
++        # teeth
++        tt = P['tt']
++        if tt > 0:
++            tH = (0.16 + 0.42 * tt) * (YL - YU) if P['o'] < 0.5 else (0.18 * w0) * (0.5 + 0.5 * tt)
++            up = cav & (v < YU + tH) & (np.abs(uu) < 0.88)
++            paint(up, an['teeth'])
++            if tt > 0.8 and P['o'] < 0.5:
++                lo = cav & (v > YL - 0.30 * (YL - YU)) & (np.abs(uu) < 0.7)
++                paint(lo, np.array(an['teeth']) * 0.94)
++    # lower lip line & shade
++    if h > t0 * 1.2:
++        k = _sstep((h - t0 * 1.2) / (t0 * 2))
++        lt = 0.75 * t0
++        lowband = inside & (v > YL - 0.25 * lt) & (v < YL + lt) & (np.abs(uu) < 0.97)
++        paint(lowband, an['line'], 0.55 * k)
++        sh_c = YL + lt + 0.10 * w0 * P['o']
++        shade = np.exp(-(u / (0.45 * Wd)) ** 2 - ((v - sh_c) / (0.09 * w0 + 0.5)) ** 2)
++        paint(shade, an['lipshade'], 0.22 * k)
++    # outline ring for rounded side walls (EDT outside cavity)
++    if cav.sum() > 16:
++        d_out = ndi.distance_transform_edt(~cav) / SS
++        upper_half = v < (YU + YL) / 2
++        ring = (d_out > 0) & (d_out < t0 * 0.75) & upper_half
++        paint(ring, an['line'])
++        ring2 = (d_out > 0) & (d_out < t0 * 0.5) & ~upper_half
++        paint(ring2, an['line'], 0.6)
++    # upper line (always; = closed mouth when h=0)
++    taper = _sstep((1.04 - np.abs(uu)) / 0.12)
++    tU = t0 * (0.8 + 0.5 * uuc ** 2) * taper
++    upline = (np.abs(uu) < 1.04) & (v > YU - 0.6 * tU) & (v < YU + 0.4 * tU + (0.35 * t0 if h < t0 else 0))
++    paint(upline, an['line'])
++    # downsample (premultiplied)
++    pm = out[..., :3] * out[..., 3:4]
++    pm = pm.reshape(n_y // SS, SS, n_x // SS, SS, 3).mean((1, 3))
++    al = out[..., 3].reshape(n_y // SS, SS, n_x // SS, SS).mean((1, 3))
++    rgb = pm / np.maximum(al[..., None], 1e-6)
++    full = np.zeros((H, W_img, 4), np.float32)
++    full[y0:y1, x0:x1, :3] = rgb; full[y0:y1, x0:x1, 3] = al
++    return full, (x0, y0, x1, y1)
++
++def jaw_warp(img, an, P, face_bbox, strength=0.55):
++    """face 层位移场：下颌随张嘴下移，U/O 时嘴角两侧脸颊略内收"""
++    H, W = img.shape[:2]
++    c = np.array(an['c']); e1 = np.array(an['e1']); e2 = np.array(an['e2']); w0 = an['w0']
++    Wd, h, vb, yU, yL = mouth_geom(an, P)
++    drop = strength * 0.70 * h
++    fx0, fy0, fx1, fy1 = face_bbox
++    X, Y = np.meshgrid(np.arange(W, dtype=np.float32), np.arange(H, dtype=np.float32))
++    dx, dy = X - c[0], Y - c[1]
++    u = dx * e1[0] + dy * e1[1]; v = dx * e2[0] + dy * e2[1]
++    vchin = (fy1 - c[1]) * 1.0
++    wy = _sstep(v / (0.35 * vchin)) * (1 - 0.0 * _sstep((v - vchin) / 20))
++    wx = np.exp(-(u / ((fx1 - fx0) * 0.38)) ** 2)
++    d = drop * wy * wx
++    # cheek squeeze for narrow mouths
++    sq = (1 - P['s']) * w0 * 0.35
++    cs = sq * np.tanh(u / w0) * np.exp(-(u / (w0 * 1.8)) ** 2 - (v / (w0 * 1.4)) ** 2)
++    du = cs
++    mapx = (X - (d * e2[0] + du * e1[0])).astype(np.float32)
++    mapy = (Y - (d * e2[1] + du * e1[1])).astype(np.float32)
++    return cv2.remap(img, mapx, mapy, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
++
++def chin_shift(an, P, face_bbox, strength=0.55):
++    Wd, h, *_ = mouth_geom(an, P)
++    return strength * 0.70 * h
++
++# ---------------------------------------------------------------- ours: frame
++def frame_ours(W, H, layers, an, P, orig_closed_keep=True):
++    out = np.zeros((H, W, 4), np.float32); out[..., :3] = 1; out[..., 3] = 1
++    face_bbox = next(L['bbox'] for L in layers if L['name'] == 'face')
++    for L in layers:
++        if L['name'] == 'mouth':
++            if (not an['orig_open']) and orig_closed_keep and P['o'] < 0.02 and abs(P['s'] - 1) < 0.02:
++                out = over(out, L['img'])      # 闭口=原画（原图本来就是闭口）
++            else:
++                m, _ = render_mouth(an, P, H, W)
++                out = over(out, m)
++            continue
++        img = L['img']
++        if L['name'] == 'face':
++            img = jaw_warp(img, an, P, face_bbox)
++        out = over(out, img)
++    return out
++
++def fit_original(an, mouth, H, W):
++    """拟合原图嘴：返回最佳参数及 IoU（风格/形状保真度）"""
++    tgt = mouth[..., 3] > 0.35
++    best = (-1, None)
++    for o in np.linspace(0, 0.8, 17):
++        for f in np.linspace(-0.6, 1.0, 9):
++            for tt in ([0, 0.5, 1.0] if an['orig_open'] else [0]):
++                P = dict(o=o, s=1.0, r=0.0, f=f, tt=tt)
++                m, _ = render_mouth(an, P, H, W)
++                pr = m[..., 3] > 0.35
++                iou = (pr & tgt).sum() / max(1, (pr | tgt).sum())
++                if iou > best[0]: best = (iou, P)
++    return best
++
++# ---------------------------------------------------------------- baseline (Anime2.5DRig v2 logic)
++def _gen_mouth_sprite(js_path):
++    import re, base64
++    s = open(js_path, encoding='utf8').read()
++    m = re.search(r"P\.mouth=\{width:(\d+),height:(\d+),b64:'([^']+)'", s)
++    w, h = int(m.group(1)), int(m.group(2))
++    d = np.frombuffer(base64.b64decode(m.group(3)), np.uint8).reshape(h, w, 4).astype(np.float32) / 255.
++    return d
++
++def baseline_setup(W, H, layers, js_path):
++    mouth = next(L for L in layers if L['name'] == 'mouth')
++    face = next(L for L in layers if L['name'] == 'face')
++    a = (mouth['img'][..., 3] * 255).astype(np.uint8)
++    ys, xs = np.nonzero(a > 8)
++    mb = dict(x0=xs.min(), x1=xs.max(), y0=ys.min(), y1=ys.max())
++    aw = mouth['img'][..., 3]
++    yy, xx = np.nonzero(aw > 0)
++    cx = np.average(xx, weights=aw[yy, xx]); cy = np.average(yy, weights=aw[yy, xx])
++    # generic close sprite, tinted (meanColorOfImg darkWeight) + recolorTo
++    rgb = mouth['img'][..., :3]; al = mouth['img'][..., 3]
++    m = (al * 255) >= 24
++    lumv = rgb[m].mean(1) * 255
++    wts = al[m] * (1 - lumv / 255) ** 2
++    tint = (rgb[m] * wts[:, None]).sum(0) / wts.sum()
++    g = _gen_mouth_sprite(js_path)
++    tw = max(2, round((mb['x1'] - mb['x0']) * 1.1)); th = max(2, round(g.shape[0] * tw / g.shape[1]))
++    spr = cv2.resize(g, (tw, th), interpolation=cv2.INTER_LINEAR)
++    A_ = spr[..., 3] > 24 / 255
++    lm = spr[..., :3].mean(2); mean = max(8 / 255, lm[A_].mean())
++    f = np.minimum(2.2, lm / mean)
++    spr[..., :3] = tint[None, None] * f[..., None]
++    sx = int(round(cx - tw / 2)); sy = int(round(mb['y0'] + 0.3 * (mb['y1'] - mb['y0']) - 0.5 * th))
++    close = np.zeros((H, W, 4), np.float32)
++    close[sy:sy + th, sx:sx + tw] = spr
++    fb = face['bbox']
++    FS = max(1, fb[2] - fb[0]) / 333.0
++    return dict(mb=mb, cx=cx, cy=cy, close=close, FS=FS, face_y1=fb[3])
++
++def frame_baseline(W, H, layers, B, mo, ease=0.72):
++    def sm(t):
++        t = np.clip(t, 0, 1); return t * t * (3 - 2 * t)
++    thr = 0.05 + ease * 0.35
++    a_open = float(sm((mo - thr) / 0.12)); a_close = 1 - a_open
++    out = np.zeros((H, W, 4), np.float32); out[..., :3] = 1; out[..., 3] = 1
++    X, Y = np.meshgrid(np.arange(W, dtype=np.float32), np.arange(H, dtype=np.float32))
++    for L in layers:
++        img = L['img']
++        if L['name'] == 'face':
++            # y += mo*6*FS*smooth((y-cy)/(face.y1-cy)) — 近似逆映射
++            d = mo * 6 * B['FS'] * sm((Y - B['cy']) / max(1, B['face_y1'] - B['cy']))
++            img = cv2.remap(img, X, (Y - d).astype(np.float32), cv2.INTER_LINEAR)
++        if L['name'] == 'mouth':
++            k = 0.5 + 0.5 * mo
++            y0 = B['mb']['y0']
++            mapy = (y0 + (Y - y0) / k).astype(np.float32)
++            mimg = cv2.remap(img, X, mapy, cv2.INTER_LINEAR)
++            mimg = mimg.copy(); mimg[..., 3] *= a_open
++            out = over(out, mimg)
++            cl = B['close'].copy(); cl[..., 3] *= a_close
++            out = over(out, cl)
++            continue
++        out = over(out, img)
++    return out
++
++def to_u8(img):
++    return (np.clip(img[..., :3], 0, 1) * 255).astype(np.uint8)
+diff --git a/tools/mouth-proto/requirements.txt b/tools/mouth-proto/requirements.txt
+new file mode 100644
+index 0000000..98e046b
+--- /dev/null
++++ b/tools/mouth-proto/requirements.txt
+@@ -0,0 +1,5 @@
++numpy
++opencv-python-headless
++scipy
++pillow
++psd-tools
+-- 
+2.47.3
+

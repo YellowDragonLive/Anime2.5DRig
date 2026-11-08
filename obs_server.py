@@ -25,7 +25,8 @@ MAX_MODEL_BYTES = 128 * 1024 * 1024
 MAX_CLIENTS = 16
 RANGES = {key: (-1, 1) for key in ('ax', 'ay', 'az', 'ex', 'ey')}
 RANGES.update({key: (0, 1) for key in ('eL', 'eR', 'mo')})
-OPTIONAL_RANGES = {'br': (-1, 1), 'mf': (-1, 1), 'mic': (0, 1)}
+OPTIONAL_RANGES = {'br': (-1, 1), 'mf': (-1, 1), 'mic': (0, 1),
+                   'va': (0, 1), 'vi': (0, 1), 'vu': (0, 1), 've': (0, 1), 'vo': (0, 1)}
 MODEL_ID = re.compile(r'^[0-9a-f]{1,16}-[0-9a-f]{1,8}-[0-9a-f]{1,8}$')
 
 for ext, mime in {'.wasm': 'application/wasm', '.data': 'application/octet-stream',

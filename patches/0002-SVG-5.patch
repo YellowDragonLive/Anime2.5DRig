@@ -1,0 +1,731 @@
+From 29b46f7e34c9d7c528a9b0520223cc30684a4c0b Mon Sep 17 00:00:00 2001
+From: Hark <hark@local>
+Date: Sun, 8 Nov 2026 10:14:06 +0000
+Subject: [PATCH 2/2] =?UTF-8?q?=E5=8F=A3=E3=81=AE=E3=82=B9=E3=82=BF?=
+ =?UTF-8?q?=E3=82=A4=E3=83=AB:=20SVG=E3=82=AD=E3=83=BC=E3=83=95=E3=83=AC?=
+ =?UTF-8?q?=E3=83=BC=E3=83=A0=E3=81=AE=E5=8F=A3=205=E7=A8=AE=20+=20?=
+ =?UTF-8?q?=E8=A8=88=E6=B8=AC=E3=80=81=E7=B7=9A=E5=B9=85/=E7=B7=9A?=
+ =?UTF-8?q?=E8=89=B2=E3=81=AE=E6=8E=A8=E5=AE=9A=E3=82=92=E6=94=B9=E5=96=84?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ IMPROVEMENTS.md              |   5 +
+ MOUTHGEN.md                  |  23 ++-
+ docs/mouth-styles/anime.svg  |   1 +
+ docs/mouth-styles/deform.svg |   1 +
+ docs/mouth-styles/lips.svg   |   1 +
+ docs/mouth-styles/simple.svg |   1 +
+ index.html                   |   3 +
+ lib/app.js                   |  31 +++-
+ lib/mouthgen.js              |  43 ++++-
+ lib/mouthstyles.js           | 315 +++++++++++++++++++++++++++++++++++
+ package.json                 |   2 +-
+ tests/mouthgen.test.js       |  24 +--
+ tools/mouth-styles-svg.js    |  14 ++
+ 13 files changed, 435 insertions(+), 29 deletions(-)
+ create mode 100644 docs/mouth-styles/anime.svg
+ create mode 100644 docs/mouth-styles/deform.svg
+ create mode 100644 docs/mouth-styles/lips.svg
+ create mode 100644 docs/mouth-styles/simple.svg
+ create mode 100644 lib/mouthstyles.js
+ create mode 100644 tools/mouth-styles-svg.js
+
+diff --git a/IMPROVEMENTS.md b/IMPROVEMENTS.md
+index 10f61ff..5a06e8b 100644
+--- a/IMPROVEMENTS.md
++++ b/IMPROVEMENTS.md
+@@ -1,5 +1,10 @@
+ # 改善一覧
+ 
++## v2.2-mouthstyles（2026-11-08）
++
++- [x] **口のスタイル**（`lib/mouthstyles.js`）: SVGパスのキーフレームで描く口を5種（おまかせ / アニメ標準 / 唇あり / シンプル / デフォルメ）+ 計測。「口」のプルダウンで切り替え、設定・OBSにも保存。`docs/mouth-styles/*.svg` で一覧
++- [x] 線の太さの推定を塗り唇に強く（see-through の厚塗り顔で線が太すぎた）、薄い線は自動で濃く
++
+ ## v2.1-mouthgen（2026-11-08）
+ 
+ - [x] **自動生成口**（`lib/mouthgen.js`）: 閉じ口の無いPSD（see-through など）で、元の口を計測して あ・い・う・え・お の口形を毎フレーム描画。口内・歯・舌・下唇、下あごと頬の連動。母音はパラメーター空間で補間するのでクロスフェードの二重像が出ない。手描きの mouth_close があれば従来どおり
+diff --git a/MOUTHGEN.md b/MOUTHGEN.md
+index 6e6bfa7..5ab273f 100644
+--- a/MOUTHGEN.md
++++ b/MOUTHGEN.md
+@@ -14,6 +14,21 @@ see-through 输出的 PSD 只有一张 `mouth`。原版把它当成「张嘴」
+ 5. 原画是闭嘴时（例如抿嘴），闭嘴状态直接显示原画，一个像素都不改。
+ 6. PSD 里有手绘的 `mouth_close` 时，自动关闭本功能，保持原来的差分切换。
+ 
++## 口のスタイル（v2.2 新增，「口」区下拉框）
++| 选项 | 适合 | 说明 |
++|---|---|---|
++| おまかせ（默认） | 所有图 | 原画是张嘴 → 计测；原画是带颜色的嘴唇 → 唇あり；其他 → アニメ標準 |
++| アニメ標準 | 大多数日系立绘 | 细上唇线 + 口腔 + 舌 + 上排牙 |
++| 唇あり（リアル寄り） | see-through 厚涂/偏写实的脸（例：9ba70197） | 上下唇用原画的唇色 |
++| シンプル（ベタ塗り） | 任何画风，最不容易出错 | 口腔单色，无牙无舌 |
++| デフォルメ | Q 版、SD | 圆嘴、粗轮廓、大舌头 |
++| 計測 | 原画本身就是张嘴（例：sample.psd） | v2.1 的方式，按原画的线宽和颜色绘制 |
++
++每套风格都是 SVG 路径关键帧（闭/あ/い/う/え/お），定义在 `lib/mouthstyles.js`。
++预览图在 `docs/mouth-styles/*.svg`，可以直接用浏览器或 Inkscape 打开。
++新增风格：在 `STYLES` 里加一项。`frames` 可以写形状参数（见 `shapes()`），也可以直接写 SVG 的 `d`；同一形状在各关键帧之间的命令必须一致，这样才能逐个数值插值。
++绘制时会把形状弯到原画的唇线上，再按倾角和大小缩放，颜色取自 PSD（线色、肤色、唇色）。改完风格后运行 `node tools/mouth-styles-svg.js`，重新生成预览。
++
+ ## 驱动
+ | 来源 | 母音 | 开口量 |
+ |---|---|---|
+@@ -28,10 +43,11 @@ see-through 输出的 PSD 只有一张 `mouth`。原版把它当成「张嘴」
+ - 想录有声的视频：先用「書き出し」录 WebM（只有画面），再在剪辑软件里把同一段音频对齐叠上。
+ 
+ ## 新增参数（保存进设定 JSON，也会同步到 OBS）
+-`mouthGen`（0=原逻辑，1=自动生成口）、`vowelA/I/U/E/O`、`jawAmp`。
++`mouthGen`（0=原逻辑，1=自动生成口）、`mouthStyle`（0–5，对应上表）、`vowelA/I/U/E/O`、`jawAmp`。
+ 
+ ## 文件
+ - `lib/mouthgen.js`：分析、绘制、母音混合、下巴位移、LPC 母音估计、挂进 rig。
++- `lib/mouthstyles.js`：SVG 关键帧风格、关键帧插值，以及纯 JS 扫描线光栅化（4×4 超采样，每次重绘约 3–5ms）。
+ - `lib/app.js`：图层挂载、每帧更新纹理、淡入淡出、face 位移、母音来源和平滑、OBS 中继。
+ - `lib/renderer.js`：新增 `updateTexture`。
+ - `lib/devices.js`：麦克风多一路时域分析器；新增 `startFile()` 播放音频驱动口型。
+@@ -51,3 +67,8 @@ see-through 输出的 PSD 只有一张 `mouth`。原版把它当成「张嘴」
+ | 0→1 跳帧比 | ≤3.0 | 1.59 → 1.11 | 1.16 → 1.09 |
+ | 拟合原画 IoU | ≥0.80 | 0.84 | 0.91 |
+ | 独立口型参数 | ≥4 | 1 → 5 | 1 → 5 |
++
++## v2.2 修正
++- 线宽只统计真正的深色墨线，涂色嘴唇不再算进线宽。之前 9ba70197 的线被估得过粗。
++- 线色太淡时（see-through 常见），自动压暗到肤色亮度的一半以下。
++- 从原画的闭嘴过渡到生成嘴的区间加宽（开口 0→0.10），避免一下子跳变。
+diff --git a/docs/mouth-styles/anime.svg b/docs/mouth-styles/anime.svg
+new file mode 100644
+index 0000000..52e31dc
+--- /dev/null
++++ b/docs/mouth-styles/anime.svg
+@@ -0,0 +1 @@
++<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 18 2.6" width="900" height="130"><rect width="18" height="2.6" fill="#f6e2d6"/><g transform="translate(1.5,0.8)"><defs><clipPath id="cav0"><path d="M-1 0 C-0.7 0 -0.5 0 0 0 C0.5 0 0.7 0 1 0 L1 0 C0.7 0 0.5 0 0 0 C-0.5 0 -0.7 0 -1 0 Z"/></clipPath></defs><path d="M-1 0 C-0.7 0 -0.5 0 0 0 C0.5 0 0.7 0 1 0 L1 0 C0.7 0 0.5 0 0 0 C-0.5 0 -0.7 0 -1 0 Z" fill="#6b1f2a"/><path d="M-0.5 0 C-0.5 -0.001 -0.276 -0.001 0 -0.001 C0.276 -0.001 0.5 -0.001 0.5 0 C0.5 0.001 0.276 0.001 0 0.001 C-0.276 0.001 -0.5 0.001 -0.5 0 Z" fill="#e38791" clip-path="url(#cav0)"/><path d="M-1 -0.3 C-0.7 -0.3 -0.5 -0.3 0 -0.3 C0.5 -0.3 0.7 -0.3 1 -0.3 L1 0 C0.7 0 0.5 0 0 0 C-0.5 0 -0.7 0 -1 0 Z" fill="#fbf6f2" clip-path="url(#cav0)"/><path d="M-1 0 C-0.7 0 -0.5 0 0 0 C0.5 0 0.7 0 1 0 L1 0.3 C0.7 0.3 0.5 0.3 0 0.3 C-0.5 0.3 -0.7 0.3 -1 0.3 Z" fill="#efe9e5" clip-path="url(#cav0)"/><path d="M-1 0 C-0.7 0 -0.5 0 0 0 C0.5 0 0.7 0 1 0" fill="none" stroke="#4a2326" stroke-width="0.05" stroke-linecap="round" opacity="0.55"/><path d="M-1 0 C-0.7 0 -0.5 0 0 0 C0.5 0 0.7 0 1 0" fill="none" stroke="#4a2326" stroke-width="0.07" stroke-linecap="round"/></g><text x="1.5" y="2.3" font-size="0.35" text-anchor="middle" fill="#555">閉</text><g transform="translate(4.5,0.8)"><defs><clipPath id="cav1"><path d="M-0.92 0.06 C-0.69 -0.072 -0.46 -0.16 0 -0.16 C0.46 -0.16 0.69 -0.072 0.92 0.06 L0.92 0.06 C0.865 0.66 0.57 0.86 0 0.86 C-0.57 0.86 -0.865 0.66 -0.92 0.06 Z"/></clipPath></defs><path d="M-0.92 0.06 C-0.69 -0.072 -0.46 -0.16 0 -0.16 C0.46 -0.16 0.69 -0.072 0.92 0.06 L0.92 0.06 C0.865 0.66 0.57 0.86 0 0.86 C-0.57 0.86 -0.865 0.66 -0.92 0.06 Z" fill="#6b1f2a"/><path d="M-0.506 0.755 C-0.506 0.589 -0.279 0.455 0 0.455 C0.279 0.455 0.506 0.589 0.506 0.755 C0.506 0.921 0.279 1.055 0 1.055 C-0.279 1.055 -0.506 0.921 -0.506 0.755 Z" fill="#e38791" clip-path="url(#cav1)"/><path d="M-0.92 -0.24 C-0.69 -0.372 -0.46 -0.46 0 -0.46 C0.46 -0.46 0.69 -0.372 0.92 -0.24 L0.92 0.112 C0.69 0.019 0.46 -0.03 0 -0.03 C-0.46 -0.03 -0.69 0.019 -0.92 0.112 Z" fill="#fbf6f2" clip-path="url(#cav1)"/><path d="M-0.92 0.06 C-0.865 0.66 -0.57 0.86 0 0.86 C0.57 0.86 0.865 0.66 0.92 0.06 L0.92 0.36 C0.865 0.96 0.57 1.16 0 1.16 C-0.57 1.16 -0.865 0.96 -0.92 0.36 Z" fill="#efe9e5" clip-path="url(#cav1)"/><path d="M-0.92 0.06 C-0.865 0.66 -0.57 0.86 0 0.86 C0.57 0.86 0.865 0.66 0.92 0.06" fill="none" stroke="#4a2326" stroke-width="0.05" stroke-linecap="round" opacity="0.55"/><path d="M-0.92 0.06 C-0.69 -0.072 -0.46 -0.16 0 -0.16 C0.46 -0.16 0.69 -0.072 0.92 0.06" fill="none" stroke="#4a2326" stroke-width="0.07" stroke-linecap="round"/></g><text x="4.5" y="2.3" font-size="0.35" text-anchor="middle" fill="#555">あ</text><g transform="translate(7.5,0.8)"><defs><clipPath id="cav2"><path d="M-1.15 0 C-0.747 -0.04 -0.632 -0.08 0 -0.08 C0.633 -0.08 0.747 -0.04 1.15 0 L1.15 0 C0.805 0.18 0.69 0.3 0 0.3 C-0.69 0.3 -0.805 0.18 -1.15 0 Z"/></clipPath></defs><path d="M-1.15 0 C-0.747 -0.04 -0.632 -0.08 0 -0.08 C0.633 -0.08 0.747 -0.04 1.15 0 L1.15 0 C0.805 0.18 0.69 0.3 0 0.3 C-0.69 0.3 -0.805 0.18 -1.15 0 Z" fill="#6b1f2a"/><path d="M-0.46 0.286 C-0.46 0.264 -0.254 0.246 0 0.246 C0.254 0.246 0.46 0.264 0.46 0.286 C0.46 0.308 0.254 0.326 0 0.326 C-0.254 0.326 -0.46 0.308 -0.46 0.286 Z" fill="#e38791" clip-path="url(#cav2)"/><path d="M-1.15 -0.3 C-0.747 -0.34 -0.632 -0.38 0 -0.38 C0.633 -0.38 0.747 -0.34 1.15 -0.3 L1.15 0.06 C0.747 0.065 0.633 0.07 0 0.07 C-0.632 0.07 -0.747 0.065 -1.15 0.06 Z" fill="#fbf6f2" clip-path="url(#cav2)"/><path d="M-1.15 -0.04 C-0.805 0.11 -0.69 0.2 0 0.2 C0.69 0.2 0.805 0.11 1.15 -0.04 L1.15 0.3 C0.805 0.48 0.69 0.6 0 0.6 C-0.69 0.6 -0.805 0.48 -1.15 0.3 Z" fill="#efe9e5" clip-path="url(#cav2)"/><path d="M-1.15 0 C-0.805 0.18 -0.69 0.3 0 0.3 C0.69 0.3 0.805 0.18 1.15 0" fill="none" stroke="#4a2326" stroke-width="0.05" stroke-linecap="round" opacity="0.55"/><path d="M-1.15 0 C-0.747 -0.04 -0.632 -0.08 0 -0.08 C0.633 -0.08 0.747 -0.04 1.15 0" fill="none" stroke="#4a2326" stroke-width="0.07" stroke-linecap="round"/></g><text x="7.5" y="2.3" font-size="0.35" text-anchor="middle" fill="#555">い</text><g transform="translate(10.5,0.8)"><defs><clipPath id="cav3"><path d="M-0.46 0.06 C-0.46 -0.028 -0.254 -0.1 0 -0.1 C0.254 -0.1 0.46 -0.028 0.46 0.06 L0.46 0.06 C0.46 0.226 0.254 0.36 0 0.36 C-0.254 0.36 -0.46 0.226 -0.46 0.06 Z"/></clipPath></defs><path d="M-0.46 0.06 C-0.46 -0.028 -0.254 -0.1 0 -0.1 C0.254 -0.1 0.46 -0.028 0.46 0.06 L0.46 0.06 C0.46 0.226 0.254 0.36 0 0.36 C-0.254 0.36 -0.46 0.226 -0.46 0.06 Z" fill="#6b1f2a"/><path d="M-0.23 0.325 C-0.23 0.27 -0.127 0.225 0 0.225 C0.127 0.225 0.23 0.27 0.23 0.325 C0.23 0.38 0.127 0.425 0 0.425 C-0.127 0.425 -0.23 0.38 -0.23 0.325 Z" fill="#e38791" clip-path="url(#cav3)"/><path d="M-0.46 -0.24 C-0.46 -0.328 -0.254 -0.4 0 -0.4 C0.254 -0.4 0.46 -0.328 0.46 -0.24 L0.46 0.06 C0.46 -0.028 0.254 -0.1 0 -0.1 C-0.254 -0.1 -0.46 -0.028 -0.46 0.06 Z" fill="#fbf6f2" clip-path="url(#cav3)"/><path d="M-0.46 0.06 C-0.46 0.226 -0.254 0.36 0 0.36 C0.254 0.36 0.46 0.226 0.46 0.06 L0.46 0.36 C0.46 0.526 0.254 0.66 0 0.66 C-0.254 0.66 -0.46 0.526 -0.46 0.36 Z" fill="#efe9e5" clip-path="url(#cav3)"/><path d="M-0.46 0.06 C-0.46 0.226 -0.254 0.36 0 0.36 C0.254 0.36 0.46 0.226 0.46 0.06" fill="none" stroke="#4a2326" stroke-width="0.05" stroke-linecap="round" opacity="0.55"/><path d="M-0.46 0.06 C-0.46 -0.028 -0.254 -0.1 0 -0.1 C0.254 -0.1 0.46 -0.028 0.46 0.06" fill="none" stroke="#4a2326" stroke-width="0.07" stroke-linecap="round"/></g><text x="10.5" y="2.3" font-size="0.35" text-anchor="middle" fill="#555">う</text><g transform="translate(13.5,0.8)"><defs><clipPath id="cav4"><path d="M-1.04 0.03 C-0.728 -0.058 -0.572 -0.13 0 -0.13 C0.572 -0.13 0.728 -0.058 1.04 0.03 L1.04 0.03 C0.884 0.373 0.624 0.52 0 0.52 C-0.624 0.52 -0.884 0.373 -1.04 0.03 Z"/></clipPath></defs><path d="M-1.04 0.03 C-0.728 -0.058 -0.572 -0.13 0 -0.13 C0.572 -0.13 0.728 -0.058 1.04 0.03 L1.04 0.03 C0.884 0.373 0.624 0.52 0 0.52 C-0.624 0.52 -0.884 0.373 -1.04 0.03 Z" fill="#6b1f2a"/><path d="M-0.52 0.45 C-0.52 0.34 -0.287 0.25 0 0.25 C0.287 0.25 0.52 0.34 0.52 0.45 C0.52 0.56 0.287 0.65 0 0.65 C-0.287 0.65 -0.52 0.56 -0.52 0.45 Z" fill="#e38791" clip-path="url(#cav4)"/><path d="M-1.04 -0.27 C-0.728 -0.358 -0.572 -0.43 0 -0.43 C0.572 -0.43 0.728 -0.358 1.04 -0.27 L1.04 0.086 C0.728 0.04 0.572 0.01 0 0.01 C-0.572 0.01 -0.728 0.04 -1.04 0.086 Z" fill="#fbf6f2" clip-path="url(#cav4)"/><path d="M-1.04 0.006 C-0.884 0.331 -0.624 0.46 0 0.46 C0.624 0.46 0.884 0.331 1.04 0.006 L1.04 0.33 C0.884 0.673 0.624 0.82 0 0.82 C-0.624 0.82 -0.884 0.673 -1.04 0.33 Z" fill="#efe9e5" clip-path="url(#cav4)"/><path d="M-1.04 0.03 C-0.884 0.373 -0.624 0.52 0 0.52 C0.624 0.52 0.884 0.373 1.04 0.03" fill="none" stroke="#4a2326" stroke-width="0.05" stroke-linecap="round" opacity="0.55"/><path d="M-1.04 0.03 C-0.728 -0.058 -0.572 -0.13 0 -0.13 C0.572 -0.13 0.728 -0.058 1.04 0.03" fill="none" stroke="#4a2326" stroke-width="0.07" stroke-linecap="round"/></g><text x="13.5" y="2.3" font-size="0.35" text-anchor="middle" fill="#555">え</text><g transform="translate(16.5,0.8)"><defs><clipPath id="cav5"><path d="M-0.64 0.12 C-0.608 -0.046 -0.353 -0.18 0 -0.18 C0.353 -0.18 0.608 -0.046 0.64 0.12 L0.64 0.12 C0.608 0.451 0.353 0.72 0 0.72 C-0.353 0.72 -0.608 0.451 -0.64 0.12 Z"/></clipPath></defs><path d="M-0.64 0.12 C-0.608 -0.046 -0.353 -0.18 0 -0.18 C0.353 -0.18 0.608 -0.046 0.64 0.12 L0.64 0.12 C0.608 0.451 0.353 0.72 0 0.72 C-0.353 0.72 -0.608 0.451 -0.64 0.12 Z" fill="#6b1f2a"/><path d="M-0.32 0.636 C-0.32 0.504 -0.177 0.396 0 0.396 C0.177 0.396 0.32 0.504 0.32 0.636 C0.32 0.768 0.177 0.876 0 0.876 C-0.177 0.876 -0.32 0.768 -0.32 0.636 Z" fill="#e38791" clip-path="url(#cav5)"/><path d="M-0.64 -0.18 C-0.608 -0.346 -0.353 -0.48 0 -0.48 C0.353 -0.48 0.608 -0.346 0.64 -0.18 L0.64 0.148 C0.608 0.003 0.353 -0.11 0 -0.11 C-0.353 -0.11 -0.608 0.003 -0.64 0.148 Z" fill="#fbf6f2" clip-path="url(#cav5)"/><path d="M-0.64 0.12 C-0.608 0.451 -0.353 0.72 0 0.72 C0.353 0.72 0.608 0.451 0.64 0.12 L0.64 0.42 C0.608 0.751 0.353 1.02 0 1.02 C-0.353 1.02 -0.608 0.751 -0.64 0.42 Z" fill="#efe9e5" clip-path="url(#cav5)"/><path d="M-0.64 0.12 C-0.608 0.451 -0.353 0.72 0 0.72 C0.353 0.72 0.608 0.451 0.64 0.12" fill="none" stroke="#4a2326" stroke-width="0.05" stroke-linecap="round" opacity="0.55"/><path d="M-0.64 0.12 C-0.608 -0.046 -0.353 -0.18 0 -0.18 C0.353 -0.18 0.608 -0.046 0.64 0.12" fill="none" stroke="#4a2326" stroke-width="0.07" stroke-linecap="round"/></g><text x="16.5" y="2.3" font-size="0.35" text-anchor="middle" fill="#555">お</text></svg>
+diff --git a/docs/mouth-styles/deform.svg b/docs/mouth-styles/deform.svg
+new file mode 100644
+index 0000000..229ec61
+--- /dev/null
++++ b/docs/mouth-styles/deform.svg
+@@ -0,0 +1 @@
++<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 18 2.6" width="900" height="130"><rect width="18" height="2.6" fill="#f6e2d6"/><g transform="translate(1.5,0.8)"><defs><clipPath id="cav0"><path d="M-0.8 -0.12 C-0.48 -0.088 -0.48 -0.04 0 -0.04 C0.48 -0.04 0.48 -0.088 0.8 -0.12 L0.8 -0.12 C0.48 -0.088 0.48 -0.04 0 -0.04 C-0.48 -0.04 -0.48 -0.088 -0.8 -0.12 Z"/></clipPath></defs><path d="M-0.8 -0.12 C-0.48 -0.088 -0.48 -0.04 0 -0.04 C0.48 -0.04 0.48 -0.088 0.8 -0.12 L0.8 -0.12 C0.48 -0.088 0.48 -0.04 0 -0.04 C-0.48 -0.04 -0.48 -0.088 -0.8 -0.12 Z" fill="#6b1f2a"/><path d="M-0.4 -0.04 C-0.4 -0.041 -0.221 -0.041 0 -0.041 C0.221 -0.041 0.4 -0.041 0.4 -0.04 C0.4 -0.039 0.221 -0.039 0 -0.039 C-0.221 -0.039 -0.4 -0.039 -0.4 -0.04 Z" fill="#e38791" clip-path="url(#cav0)"/><path d="M-0.8 -0.12 C-0.48 -0.088 -0.48 -0.04 0 -0.04 C0.48 -0.04 0.48 -0.088 0.8 -0.12" fill="none" stroke="#4a2326" stroke-width="0.05" stroke-linecap="round" opacity="1"/><path d="M-0.8 -0.12 C-0.48 -0.088 -0.48 -0.04 0 -0.04 C0.48 -0.04 0.48 -0.088 0.8 -0.12" fill="none" stroke="#4a2326" stroke-width="0.10500000000000001" stroke-linecap="round"/></g><text x="1.5" y="2.3" font-size="0.35" text-anchor="middle" fill="#555">閉</text><g transform="translate(4.5,0.8)"><defs><clipPath id="cav1"><path d="M-0.86 0.04 C-0.602 -0.01 -0.516 -0.06 0 -0.06 C0.516 -0.06 0.602 -0.01 0.86 0.04 L0.86 0.04 C0.843 0.768 0.516 0.95 0 0.95 C-0.516 0.95 -0.843 0.768 -0.86 0.04 Z"/></clipPath></defs><path d="M-0.86 0.04 C-0.602 -0.01 -0.516 -0.06 0 -0.06 C0.516 -0.06 0.602 -0.01 0.86 0.04 L0.86 0.04 C0.843 0.768 0.516 0.95 0 0.95 C-0.516 0.95 -0.843 0.768 -0.86 0.04 Z" fill="#6b1f2a"/><path d="M-0.516 0.824 C-0.516 0.625 -0.285 0.464 0 0.464 C0.285 0.464 0.516 0.625 0.516 0.824 C0.516 1.023 0.285 1.184 0 1.184 C-0.285 1.184 -0.516 1.023 -0.516 0.824 Z" fill="#e38791" clip-path="url(#cav1)"/><path d="M-0.86 0.04 C-0.843 0.768 -0.516 0.95 0 0.95 C0.516 0.95 0.843 0.768 0.86 0.04" fill="none" stroke="#4a2326" stroke-width="0.05" stroke-linecap="round" opacity="1"/><path d="M-0.86 0.04 C-0.602 -0.01 -0.516 -0.06 0 -0.06 C0.516 -0.06 0.602 -0.01 0.86 0.04" fill="none" stroke="#4a2326" stroke-width="0.10500000000000001" stroke-linecap="round"/></g><text x="4.5" y="2.3" font-size="0.35" text-anchor="middle" fill="#555">あ</text><g transform="translate(7.5,0.8)"><defs><clipPath id="cav2"><path d="M-0.95 -0.04 C-0.665 -0.04 -0.522 -0.04 0 -0.04 C0.523 -0.04 0.665 -0.04 0.95 -0.04 L0.95 -0.04 C0.712 0.226 0.57 0.34 0 0.34 C-0.57 0.34 -0.712 0.226 -0.95 -0.04 Z"/></clipPath></defs><path d="M-0.95 -0.04 C-0.665 -0.04 -0.522 -0.04 0 -0.04 C0.523 -0.04 0.665 -0.04 0.95 -0.04 L0.95 -0.04 C0.712 0.226 0.57 0.34 0 0.34 C-0.57 0.34 -0.712 0.226 -0.95 -0.04 Z" fill="#6b1f2a"/><path d="M-0.427 0.312 C-0.427 0.268 -0.236 0.232 0 0.232 C0.236 0.232 0.428 0.268 0.428 0.312 C0.428 0.356 0.236 0.392 0 0.392 C-0.236 0.392 -0.427 0.356 -0.427 0.312 Z" fill="#e38791" clip-path="url(#cav2)"/><path d="M-0.95 -0.04 C-0.712 0.226 -0.57 0.34 0 0.34 C0.57 0.34 0.712 0.226 0.95 -0.04" fill="none" stroke="#4a2326" stroke-width="0.05" stroke-linecap="round" opacity="1"/><path d="M-0.95 -0.04 C-0.665 -0.04 -0.522 -0.04 0 -0.04 C0.523 -0.04 0.665 -0.04 0.95 -0.04" fill="none" stroke="#4a2326" stroke-width="0.10500000000000001" stroke-linecap="round"/></g><text x="7.5" y="2.3" font-size="0.35" text-anchor="middle" fill="#555">い</text><g transform="translate(10.5,0.8)"><defs><clipPath id="cav3"><path d="M-0.36 0.06 C-0.36 -0.006 -0.199 -0.06 0 -0.06 C0.199 -0.06 0.36 -0.006 0.36 0.06 L0.36 0.06 C0.36 0.237 0.199 0.38 0 0.38 C-0.199 0.38 -0.36 0.237 -0.36 0.06 Z"/></clipPath></defs><path d="M-0.36 0.06 C-0.36 -0.006 -0.199 -0.06 0 -0.06 C0.199 -0.06 0.36 -0.006 0.36 0.06 L0.36 0.06 C0.36 0.237 0.199 0.38 0 0.38 C-0.199 0.38 -0.36 0.237 -0.36 0.06 Z" fill="#6b1f2a"/><path d="M-0.198 0.338 C-0.198 0.272 -0.109 0.218 0 0.218 C0.109 0.218 0.198 0.272 0.198 0.338 C0.198 0.404 0.109 0.458 0 0.458 C-0.109 0.458 -0.198 0.404 -0.198 0.338 Z" fill="#e38791" clip-path="url(#cav3)"/><path d="M-0.36 0.06 C-0.36 0.237 -0.199 0.38 0 0.38 C0.199 0.38 0.36 0.237 0.36 0.06" fill="none" stroke="#4a2326" stroke-width="0.05" stroke-linecap="round" opacity="1"/><path d="M-0.36 0.06 C-0.36 -0.006 -0.199 -0.06 0 -0.06 C0.199 -0.06 0.36 -0.006 0.36 0.06" fill="none" stroke="#4a2326" stroke-width="0.10500000000000001" stroke-linecap="round"/></g><text x="10.5" y="2.3" font-size="0.35" text-anchor="middle" fill="#555">う</text><g transform="translate(13.5,0.8)"><defs><clipPath id="cav4"><path d="M-0.82 0.04 C-0.656 -0.015 -0.453 -0.06 0 -0.06 C0.453 -0.06 0.656 -0.015 0.82 0.04 L0.82 0.04 C0.738 0.322 0.453 0.55 0 0.55 C-0.453 0.55 -0.738 0.322 -0.82 0.04 Z"/></clipPath></defs><path d="M-0.82 0.04 C-0.656 -0.015 -0.453 -0.06 0 -0.06 C0.453 -0.06 0.656 -0.015 0.82 0.04 L0.82 0.04 C0.738 0.322 0.453 0.55 0 0.55 C-0.453 0.55 -0.738 0.322 -0.82 0.04 Z" fill="#6b1f2a"/><path d="M-0.451 0.473 C-0.451 0.352 -0.249 0.253 0 0.253 C0.249 0.253 0.451 0.352 0.451 0.473 C0.451 0.594 0.249 0.693 0 0.693 C-0.249 0.693 -0.451 0.594 -0.451 0.473 Z" fill="#e38791" clip-path="url(#cav4)"/><path d="M-0.82 0.04 C-0.738 0.322 -0.453 0.55 0 0.55 C0.453 0.55 0.738 0.322 0.82 0.04" fill="none" stroke="#4a2326" stroke-width="0.05" stroke-linecap="round" opacity="1"/><path d="M-0.82 0.04 C-0.656 -0.015 -0.453 -0.06 0 -0.06 C0.453 -0.06 0.656 -0.015 0.82 0.04" fill="none" stroke="#4a2326" stroke-width="0.10500000000000001" stroke-linecap="round"/></g><text x="13.5" y="2.3" font-size="0.35" text-anchor="middle" fill="#555">え</text><g transform="translate(16.5,0.8)"><defs><clipPath id="cav5"><path d="M-0.46 0.14 C-0.46 -0.026 -0.254 -0.16 0 -0.16 C0.254 -0.16 0.46 -0.026 0.46 0.14 L0.46 0.14 C0.46 0.504 0.254 0.8 0 0.8 C-0.254 0.8 -0.46 0.504 -0.46 0.14 Z"/></clipPath></defs><path d="M-0.46 0.14 C-0.46 -0.026 -0.254 -0.16 0 -0.16 C0.254 -0.16 0.46 -0.026 0.46 0.14 L0.46 0.14 C0.46 0.504 0.254 0.8 0 0.8 C-0.254 0.8 -0.46 0.504 -0.46 0.14 Z" fill="#6b1f2a"/><path d="M-0.253 0.702 C-0.253 0.547 -0.14 0.422 0 0.422 C0.14 0.422 0.253 0.547 0.253 0.702 C0.253 0.857 0.14 0.982 0 0.982 C-0.14 0.982 -0.253 0.857 -0.253 0.702 Z" fill="#e38791" clip-path="url(#cav5)"/><path d="M-0.46 0.14 C-0.46 0.504 -0.254 0.8 0 0.8 C0.254 0.8 0.46 0.504 0.46 0.14" fill="none" stroke="#4a2326" stroke-width="0.05" stroke-linecap="round" opacity="1"/><path d="M-0.46 0.14 C-0.46 -0.026 -0.254 -0.16 0 -0.16 C0.254 -0.16 0.46 -0.026 0.46 0.14" fill="none" stroke="#4a2326" stroke-width="0.10500000000000001" stroke-linecap="round"/></g><text x="16.5" y="2.3" font-size="0.35" text-anchor="middle" fill="#555">お</text></svg>
+diff --git a/docs/mouth-styles/lips.svg b/docs/mouth-styles/lips.svg
+new file mode 100644
+index 0000000..6d8c4ac
+--- /dev/null
++++ b/docs/mouth-styles/lips.svg
+@@ -0,0 +1 @@
++<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 18 2.6" width="900" height="130"><rect width="18" height="2.6" fill="#f6e2d6"/><g transform="translate(1.5,0.8)"><defs><clipPath id="cav0"><path d="M-0.92 0 C-0.644 0 -0.46 0 0 0 C0.46 0 0.644 0 0.92 0 L0.92 0 C0.644 0 0.46 0 0 0 C-0.46 0 -0.644 0 -0.92 0 Z"/></clipPath></defs><path d="M-0.92 0 C-0.644 0 -0.46 0 0 0 C0.46 0 0.644 0 0.92 0 L0.92 0 C0.644 0.07 0.46 0.18 0 0.2 C-0.46 0.18 -0.644 0.07 -0.92 0 Z" fill="#d98a8a"/><path d="M-0.92 0 C-0.644 -0.042 -0.46 -0.108 0 -0.12 C0.46 -0.108 0.644 -0.042 0.92 0 L0.92 0 C0.644 0 0.46 0 0 0 C-0.46 0 -0.644 0 -0.92 0 Z" fill="#c97a7d"/><path d="M-0.92 0 C-0.644 0 -0.46 0 0 0 C0.46 0 0.644 0 0.92 0 L0.92 0 C0.644 0 0.46 0 0 0 C-0.46 0 -0.644 0 -0.92 0 Z" fill="#6b1f2a"/><path d="M-0.46 0 C-0.46 -0.001 -0.254 -0.001 0 -0.001 C0.254 -0.001 0.46 -0.001 0.46 0 C0.46 0.001 0.254 0.001 0 0.001 C-0.254 0.001 -0.46 0.001 -0.46 0 Z" fill="#e38791" clip-path="url(#cav0)"/><path d="M-0.92 -0.3 C-0.644 -0.3 -0.46 -0.3 0 -0.3 C0.46 -0.3 0.644 -0.3 0.92 -0.3 L0.92 0 C0.644 0 0.46 0 0 0 C-0.46 0 -0.644 0 -0.92 0 Z" fill="#fbf6f2" clip-path="url(#cav0)"/><path d="M-0.92 0 C-0.644 0 -0.46 0 0 0 C0.46 0 0.644 0 0.92 0 L0.92 0.3 C0.644 0.3 0.46 0.3 0 0.3 C-0.46 0.3 -0.644 0.3 -0.92 0.3 Z" fill="#efe9e5" clip-path="url(#cav0)"/><path d="M-0.92 0 C-0.644 0 -0.46 0 0 0 C0.46 0 0.644 0 0.92 0" fill="none" stroke="#4a2326" stroke-width="0.049" stroke-linecap="round"/></g><text x="1.5" y="2.3" font-size="0.35" text-anchor="middle" fill="#555">閉</text><g transform="translate(4.5,0.8)"><defs><clipPath id="cav1"><path d="M-0.86 0.06 C-0.688 -0.048 -0.43 -0.12 0 -0.12 C0.43 -0.12 0.688 -0.048 0.86 0.06 L0.86 0.06 C0.791 0.57 0.516 0.74 0 0.74 C-0.516 0.74 -0.791 0.57 -0.86 0.06 Z"/></clipPath></defs><path d="M-0.86 0.06 C-0.791 0.57 -0.516 0.74 0 0.74 C0.516 0.74 0.791 0.57 0.86 0.06 L0.86 0.06 C0.791 0.626 0.516 0.884 0 0.9 C-0.516 0.884 -0.791 0.626 -0.86 0.06 Z" fill="#d98a8a"/><path d="M-0.86 0.06 C-0.688 -0.083 -0.43 -0.21 0 -0.22 C0.43 -0.21 0.688 -0.083 0.86 0.06 L0.86 0.06 C0.688 -0.048 0.43 -0.12 0 -0.12 C-0.43 -0.12 -0.688 -0.048 -0.86 0.06 Z" fill="#c97a7d"/><path d="M-0.86 0.06 C-0.688 -0.048 -0.43 -0.12 0 -0.12 C0.43 -0.12 0.688 -0.048 0.86 0.06 L0.86 0.06 C0.791 0.57 0.516 0.74 0 0.74 C-0.516 0.74 -0.791 0.57 -0.86 0.06 Z" fill="#6b1f2a"/><path d="M-0.473 0.649 C-0.473 0.505 -0.261 0.389 0 0.389 C0.261 0.389 0.473 0.505 0.473 0.649 C0.473 0.793 0.261 0.909 0 0.909 C-0.261 0.909 -0.473 0.793 -0.473 0.649 Z" fill="#e38791" clip-path="url(#cav1)"/><path d="M-0.86 -0.24 C-0.688 -0.348 -0.43 -0.42 0 -0.42 C0.43 -0.42 0.688 -0.348 0.86 -0.24 L0.86 0.108 C0.688 0.036 0.43 0 0 0 C-0.43 0 -0.688 0.036 -0.86 0.108 Z" fill="#fbf6f2" clip-path="url(#cav1)"/><path d="M-0.86 0.06 C-0.791 0.57 -0.516 0.74 0 0.74 C0.516 0.74 0.791 0.57 0.86 0.06 L0.86 0.36 C0.791 0.87 0.516 1.04 0 1.04 C-0.516 1.04 -0.791 0.87 -0.86 0.36 Z" fill="#efe9e5" clip-path="url(#cav1)"/><path d="M-0.86 0.06 C-0.688 -0.048 -0.43 -0.12 0 -0.12 C0.43 -0.12 0.688 -0.048 0.86 0.06" fill="none" stroke="#4a2326" stroke-width="0.049" stroke-linecap="round"/></g><text x="4.5" y="2.3" font-size="0.35" text-anchor="middle" fill="#555">あ</text><g transform="translate(7.5,0.8)"><defs><clipPath id="cav2"><path d="M-1.06 0 C-0.689 -0.03 -0.583 -0.06 0 -0.06 C0.583 -0.06 0.689 -0.03 1.06 0 L1.06 0 C0.742 0.144 0.636 0.24 0 0.24 C-0.636 0.24 -0.742 0.144 -1.06 0 Z"/></clipPath></defs><path d="M-1.06 0 C-0.742 0.144 -0.636 0.24 0 0.24 C0.636 0.24 0.742 0.144 1.06 0 L1.06 0 C0.742 0.19 0.636 0.357 0 0.37 C-0.636 0.357 -0.742 0.19 -1.06 0 Z" fill="#d98a8a"/><path d="M-1.06 0 C-0.689 -0.058 -0.583 -0.132 0 -0.14 C0.583 -0.132 0.689 -0.058 1.06 0 L1.06 0 C0.689 -0.03 0.583 -0.06 0 -0.06 C-0.583 -0.06 -0.689 -0.03 -1.06 0 Z" fill="#c97a7d"/><path d="M-1.06 0 C-0.689 -0.03 -0.583 -0.06 0 -0.06 C0.583 -0.06 0.689 -0.03 1.06 0 L1.06 0 C0.742 0.144 0.636 0.24 0 0.24 C-0.636 0.24 -0.742 0.144 -1.06 0 Z" fill="#6b1f2a"/><path d="M-0.424 0.229 C-0.424 0.213 -0.234 0.199 0 0.199 C0.234 0.199 0.424 0.213 0.424 0.229 C0.424 0.246 0.234 0.259 0 0.259 C-0.234 0.259 -0.424 0.246 -0.424 0.229 Z" fill="#e38791" clip-path="url(#cav2)"/><path d="M-1.06 -0.3 C-0.689 -0.33 -0.583 -0.36 0 -0.36 C0.583 -0.36 0.689 -0.33 1.06 -0.3 L1.06 0.048 C0.689 0.054 0.583 0.06 0 0.06 C-0.583 0.06 -0.689 0.054 -1.06 0.048 Z" fill="#fbf6f2" clip-path="url(#cav2)"/><path d="M-1.06 -0.036 C-0.742 0.081 -0.636 0.15 0 0.15 C0.636 0.15 0.742 0.081 1.06 -0.036 L1.06 0.3 C0.742 0.444 0.636 0.54 0 0.54 C-0.636 0.54 -0.742 0.444 -1.06 0.3 Z" fill="#efe9e5" clip-path="url(#cav2)"/><path d="M-1.06 0 C-0.689 -0.03 -0.583 -0.06 0 -0.06 C0.583 -0.06 0.689 -0.03 1.06 0" fill="none" stroke="#4a2326" stroke-width="0.049" stroke-linecap="round"/></g><text x="7.5" y="2.3" font-size="0.35" text-anchor="middle" fill="#555">い</text><g transform="translate(10.5,0.8)"><defs><clipPath id="cav3"><path d="M-0.42 0.06 C-0.42 -0.017 -0.232 -0.08 0 -0.08 C0.232 -0.08 0.42 -0.017 0.42 0.06 L0.42 0.06 C0.42 0.192 0.232 0.3 0 0.3 C-0.232 0.3 -0.42 0.192 -0.42 0.06 Z"/></clipPath></defs><path d="M-0.42 0.06 C-0.42 0.192 -0.232 0.3 0 0.3 C0.232 0.3 0.42 0.192 0.42 0.06 L0.42 0.06 C0.42 0.255 0.232 0.462 0 0.48 C-0.232 0.462 -0.42 0.255 -0.42 0.06 Z" fill="#d98a8a"/><path d="M-0.42 0.06 C-0.42 -0.063 -0.232 -0.197 0 -0.21 C0.232 -0.197 0.42 -0.063 0.42 0.06 L0.42 0.06 C0.42 -0.017 0.232 -0.08 0 -0.08 C-0.232 -0.08 -0.42 -0.017 -0.42 0.06 Z" fill="#c97a7d"/><path d="M-0.42 0.06 C-0.42 -0.017 -0.232 -0.08 0 -0.08 C0.232 -0.08 0.42 -0.017 0.42 0.06 L0.42 0.06 C0.42 0.192 0.232 0.3 0 0.3 C-0.232 0.3 -0.42 0.192 -0.42 0.06 Z" fill="#6b1f2a"/><path d="M-0.21 0.272 C-0.21 0.228 -0.116 0.192 0 0.192 C0.116 0.192 0.21 0.228 0.21 0.272 C0.21 0.316 0.116 0.352 0 0.352 C-0.116 0.352 -0.21 0.316 -0.21 0.272 Z" fill="#e38791" clip-path="url(#cav3)"/><path d="M-0.42 -0.24 C-0.42 -0.317 -0.232 -0.38 0 -0.38 C0.232 -0.38 0.42 -0.317 0.42 -0.24 L0.42 0.06 C0.42 -0.017 0.232 -0.08 0 -0.08 C-0.232 -0.08 -0.42 -0.017 -0.42 0.06 Z" fill="#fbf6f2" clip-path="url(#cav3)"/><path d="M-0.42 0.06 C-0.42 0.192 -0.232 0.3 0 0.3 C0.232 0.3 0.42 0.192 0.42 0.06 L0.42 0.36 C0.42 0.492 0.232 0.6 0 0.6 C-0.232 0.6 -0.42 0.492 -0.42 0.36 Z" fill="#efe9e5" clip-path="url(#cav3)"/><path d="M-0.42 0.06 C-0.42 -0.017 -0.232 -0.08 0 -0.08 C0.232 -0.08 0.42 -0.017 0.42 0.06" fill="none" stroke="#4a2326" stroke-width="0.049" stroke-linecap="round"/></g><text x="10.5" y="2.3" font-size="0.35" text-anchor="middle" fill="#555">う</text><g transform="translate(13.5,0.8)"><defs><clipPath id="cav4"><path d="M-0.98 0.03 C-0.686 -0.042 -0.539 -0.1 0 -0.1 C0.539 -0.1 0.686 -0.042 0.98 0.03 L0.98 0.03 C0.833 0.317 0.588 0.44 0 0.44 C-0.588 0.44 -0.833 0.317 -0.98 0.03 Z"/></clipPath></defs><path d="M-0.98 0.03 C-0.833 0.317 -0.588 0.44 0 0.44 C0.588 0.44 0.833 0.317 0.98 0.03 L0.98 0.03 C0.833 0.369 0.588 0.575 0 0.59 C-0.588 0.575 -0.833 0.369 -0.98 0.03 Z" fill="#d98a8a"/><path d="M-0.98 0.03 C-0.686 -0.073 -0.539 -0.181 0 -0.19 C0.539 -0.181 0.686 -0.073 0.98 0.03 L0.98 0.03 C0.686 -0.042 0.539 -0.1 0 -0.1 C-0.539 -0.1 -0.686 -0.042 -0.98 0.03 Z" fill="#c97a7d"/><path d="M-0.98 0.03 C-0.686 -0.042 -0.539 -0.1 0 -0.1 C0.539 -0.1 0.686 -0.042 0.98 0.03 L0.98 0.03 C0.833 0.317 0.588 0.44 0 0.44 C-0.588 0.44 -0.833 0.317 -0.98 0.03 Z" fill="#6b1f2a"/><path d="M-0.49 0.377 C-0.49 0.278 -0.27 0.197 0 0.197 C0.27 0.197 0.49 0.278 0.49 0.377 C0.49 0.476 0.27 0.557 0 0.557 C-0.27 0.557 -0.49 0.476 -0.49 0.377 Z" fill="#e38791" clip-path="url(#cav4)"/><path d="M-0.98 -0.27 C-0.686 -0.341 -0.539 -0.4 0 -0.4 C0.539 -0.4 0.686 -0.341 0.98 -0.27 L0.98 0.078 C0.686 0.042 0.539 0.02 0 0.02 C-0.539 0.02 -0.686 0.042 -0.98 0.078 Z" fill="#fbf6f2" clip-path="url(#cav4)"/><path d="M-0.98 0.01 C-0.833 0.282 -0.588 0.39 0 0.39 C0.588 0.39 0.833 0.282 0.98 0.01 L0.98 0.33 C0.833 0.617 0.588 0.74 0 0.74 C-0.588 0.74 -0.833 0.617 -0.98 0.33 Z" fill="#efe9e5" clip-path="url(#cav4)"/><path d="M-0.98 0.03 C-0.686 -0.042 -0.539 -0.1 0 -0.1 C0.539 -0.1 0.686 -0.042 0.98 0.03" fill="none" stroke="#4a2326" stroke-width="0.049" stroke-linecap="round"/></g><text x="13.5" y="2.3" font-size="0.35" text-anchor="middle" fill="#555">え</text><g transform="translate(16.5,0.8)"><defs><clipPath id="cav5"><path d="M-0.58 0.1 C-0.551 -0.038 -0.32 -0.15 0 -0.15 C0.32 -0.15 0.551 -0.038 0.58 0.1 L0.58 0.1 C0.551 0.376 0.32 0.6 0 0.6 C-0.32 0.6 -0.551 0.376 -0.58 0.1 Z"/></clipPath></defs><path d="M-0.58 0.1 C-0.551 0.376 -0.32 0.6 0 0.6 C0.32 0.6 0.551 0.376 0.58 0.1 L0.58 0.1 C0.551 0.436 0.32 0.753 0 0.77 C-0.32 0.753 -0.551 0.436 -0.58 0.1 Z" fill="#d98a8a"/><path d="M-0.58 0.1 C-0.551 -0.08 -0.32 -0.258 0 -0.27 C0.32 -0.258 0.551 -0.08 0.58 0.1 L0.58 0.1 C0.551 -0.038 0.32 -0.15 0 -0.15 C-0.32 -0.15 -0.551 -0.038 -0.58 0.1 Z" fill="#c97a7d"/><path d="M-0.58 0.1 C-0.551 -0.038 -0.32 -0.15 0 -0.15 C0.32 -0.15 0.551 -0.038 0.58 0.1 L0.58 0.1 C0.551 0.376 0.32 0.6 0 0.6 C-0.32 0.6 -0.551 0.376 -0.58 0.1 Z" fill="#6b1f2a"/><path d="M-0.29 0.53 C-0.29 0.42 -0.16 0.33 0 0.33 C0.16 0.33 0.29 0.42 0.29 0.53 C0.29 0.64 0.16 0.73 0 0.73 C-0.16 0.73 -0.29 0.64 -0.29 0.53 Z" fill="#e38791" clip-path="url(#cav5)"/><path d="M-0.58 -0.2 C-0.551 -0.338 -0.32 -0.45 0 -0.45 C0.32 -0.45 0.551 -0.338 0.58 -0.2 L0.58 0.124 C0.551 0.004 0.32 -0.09 0 -0.09 C-0.32 -0.09 -0.551 0.004 -0.58 0.124 Z" fill="#fbf6f2" clip-path="url(#cav5)"/><path d="M-0.58 0.1 C-0.551 0.376 -0.32 0.6 0 0.6 C0.32 0.6 0.551 0.376 0.58 0.1 L0.58 0.4 C0.551 0.676 0.32 0.9 0 0.9 C-0.32 0.9 -0.551 0.676 -0.58 0.4 Z" fill="#efe9e5" clip-path="url(#cav5)"/><path d="M-0.58 0.1 C-0.551 -0.038 -0.32 -0.15 0 -0.15 C0.32 -0.15 0.551 -0.038 0.58 0.1" fill="none" stroke="#4a2326" stroke-width="0.049" stroke-linecap="round"/></g><text x="16.5" y="2.3" font-size="0.35" text-anchor="middle" fill="#555">お</text></svg>
+diff --git a/docs/mouth-styles/simple.svg b/docs/mouth-styles/simple.svg
+new file mode 100644
+index 0000000..66efe4b
+--- /dev/null
++++ b/docs/mouth-styles/simple.svg
+@@ -0,0 +1 @@
++<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 18 2.6" width="900" height="130"><rect width="18" height="2.6" fill="#f6e2d6"/><g transform="translate(1.5,0.8)"><defs><clipPath id="cav0"><path d="M-0.95 0 C-0.665 0 -0.475 0 0 0 C0.475 0 0.665 0 0.95 0 L0.95 0 C0.665 0 0.475 0 0 0 C-0.475 0 -0.665 0 -0.95 0 Z"/></clipPath></defs><path d="M-0.95 0 C-0.665 0 -0.475 0 0 0 C0.475 0 0.665 0 0.95 0 L0.95 0 C0.665 0 0.475 0 0 0 C-0.475 0 -0.665 0 -0.95 0 Z" fill="#6b1f2a"/><path d="M-0.95 0 C-0.665 0 -0.475 0 0 0 C0.475 0 0.665 0 0.95 0" fill="none" stroke="#4a2326" stroke-width="0.07" stroke-linecap="round"/></g><text x="1.5" y="2.3" font-size="0.35" text-anchor="middle" fill="#555">閉</text><g transform="translate(4.5,0.8)"><defs><clipPath id="cav1"><path d="M-0.9 0.06 C-0.675 -0.048 -0.45 -0.12 0 -0.12 C0.45 -0.12 0.675 -0.048 0.9 0.06 L0.9 0.06 C0.846 0.615 0.558 0.8 0 0.8 C-0.558 0.8 -0.846 0.615 -0.9 0.06 Z"/></clipPath></defs><path d="M-0.9 0.06 C-0.675 -0.048 -0.45 -0.12 0 -0.12 C0.45 -0.12 0.675 -0.048 0.9 0.06 L0.9 0.06 C0.846 0.615 0.558 0.8 0 0.8 C-0.558 0.8 -0.846 0.615 -0.9 0.06 Z" fill="#6b1f2a"/><path d="M-0.9 0.06 C-0.675 -0.048 -0.45 -0.12 0 -0.12 C0.45 -0.12 0.675 -0.048 0.9 0.06" fill="none" stroke="#4a2326" stroke-width="0.07" stroke-linecap="round"/></g><text x="4.5" y="2.3" font-size="0.35" text-anchor="middle" fill="#555">あ</text><g transform="translate(7.5,0.8)"><defs><clipPath id="cav2"><path d="M-1.08 0 C-0.702 -0.025 -0.594 -0.05 0 -0.05 C0.594 -0.05 0.702 -0.025 1.08 0 L1.08 0 C0.756 0.132 0.648 0.22 0 0.22 C-0.648 0.22 -0.756 0.132 -1.08 0 Z"/></clipPath></defs><path d="M-1.08 0 C-0.702 -0.025 -0.594 -0.05 0 -0.05 C0.594 -0.05 0.702 -0.025 1.08 0 L1.08 0 C0.756 0.132 0.648 0.22 0 0.22 C-0.648 0.22 -0.756 0.132 -1.08 0 Z" fill="#6b1f2a"/><path d="M-1.08 0 C-0.702 -0.025 -0.594 -0.05 0 -0.05 C0.594 -0.05 0.702 -0.025 1.08 0" fill="none" stroke="#4a2326" stroke-width="0.07" stroke-linecap="round"/></g><text x="7.5" y="2.3" font-size="0.35" text-anchor="middle" fill="#555">い</text><g transform="translate(10.5,0.8)"><defs><clipPath id="cav3"><path d="M-0.4 0.06 C-0.4 -0.017 -0.221 -0.08 0 -0.08 C0.221 -0.08 0.4 -0.017 0.4 0.06 L0.4 0.06 C0.4 0.204 0.221 0.32 0 0.32 C-0.221 0.32 -0.4 0.204 -0.4 0.06 Z"/></clipPath></defs><path d="M-0.4 0.06 C-0.4 -0.017 -0.221 -0.08 0 -0.08 C0.221 -0.08 0.4 -0.017 0.4 0.06 L0.4 0.06 C0.4 0.204 0.221 0.32 0 0.32 C-0.221 0.32 -0.4 0.204 -0.4 0.06 Z" fill="#6b1f2a"/><path d="M-0.4 0.06 C-0.4 -0.017 -0.221 -0.08 0 -0.08 C0.221 -0.08 0.4 -0.017 0.4 0.06" fill="none" stroke="#4a2326" stroke-width="0.07" stroke-linecap="round"/></g><text x="10.5" y="2.3" font-size="0.35" text-anchor="middle" fill="#555">う</text><g transform="translate(13.5,0.8)"><defs><clipPath id="cav4"><path d="M-0.9 0.05 C-0.72 -0.033 -0.497 -0.1 0 -0.1 C0.497 -0.1 0.72 -0.033 0.9 0.05 L0.9 0.05 C0.765 0.271 0.497 0.45 0 0.45 C-0.497 0.45 -0.765 0.271 -0.9 0.05 Z"/></clipPath></defs><path d="M-0.9 0.05 C-0.72 -0.033 -0.497 -0.1 0 -0.1 C0.497 -0.1 0.72 -0.033 0.9 0.05 L0.9 0.05 C0.765 0.271 0.497 0.45 0 0.45 C-0.497 0.45 -0.765 0.271 -0.9 0.05 Z" fill="#6b1f2a"/><path d="M-0.9 0.05 C-0.72 -0.033 -0.497 -0.1 0 -0.1 C0.497 -0.1 0.72 -0.033 0.9 0.05" fill="none" stroke="#4a2326" stroke-width="0.07" stroke-linecap="round"/></g><text x="13.5" y="2.3" font-size="0.35" text-anchor="middle" fill="#555">え</text><g transform="translate(16.5,0.8)"><defs><clipPath id="cav5"><path d="M-0.5 0.12 C-0.5 -0.046 -0.276 -0.18 0 -0.18 C0.276 -0.18 0.5 -0.046 0.5 0.12 L0.5 0.12 C0.5 0.44 0.276 0.7 0 0.7 C-0.276 0.7 -0.5 0.44 -0.5 0.12 Z"/></clipPath></defs><path d="M-0.5 0.12 C-0.5 -0.046 -0.276 -0.18 0 -0.18 C0.276 -0.18 0.5 -0.046 0.5 0.12 L0.5 0.12 C0.5 0.44 0.276 0.7 0 0.7 C-0.276 0.7 -0.5 0.44 -0.5 0.12 Z" fill="#6b1f2a"/><path d="M-0.5 0.12 C-0.5 -0.046 -0.276 -0.18 0 -0.18 C0.276 -0.18 0.5 -0.046 0.5 0.12" fill="none" stroke="#4a2326" stroke-width="0.07" stroke-linecap="round"/></g><text x="16.5" y="2.3" font-size="0.35" text-anchor="middle" fill="#555">お</text></svg>
+diff --git a/index.html b/index.html
+index 4d64882..9e0dbda 100644
+--- a/index.html
++++ b/index.html
+@@ -125,6 +125,8 @@
+       <div class="row"><label>閉じ口 上下</label><input type="range" id="pMouthCY" min="-1" max="1" step="0.01" value="0"><span class="val"></span></div>
+       <p class="section-hint">自動生成口：PSDに閉じ口が無いとき（see-through など）、元の口から あ・い・う・え・お の口形を自動で描きます。0 で従来の差分切り替え。</p>
+       <div class="row"><label>自動生成口</label><input type="range" id="pMouthGen" min="0" max="1" step="1" value="1"><span class="val"></span></div>
++      <label class="check-row">口のスタイル <select id="mouthStyleSel" title="合わない時は別のスタイルに切り替えてください"></select></label>
++      <div class="row" hidden><label>口のスタイル番号</label><input type="range" id="pMouthStyle" min="0" max="5" step="1" value="0"><span class="val"></span></div>
+       <div class="row"><label>母音 あ</label><input type="range" id="pVowelA" min="0" max="1" step="0.01" value="0"><span class="val"></span></div>
+       <div class="row"><label>母音 い</label><input type="range" id="pVowelI" min="0" max="1" step="0.01" value="0"><span class="val"></span></div>
+       <div class="row"><label>母音 う</label><input type="range" id="pVowelU" min="0" max="1" step="0.01" value="0"><span class="val"></span></div>
+@@ -238,6 +240,7 @@
+ <script src="lib/ag-psd.min.js"></script>
+ <script src="lib/rigger.js"></script>
+ <script src="lib/genericparts.js"></script>
++<script src="lib/mouthstyles.js"></script>
+ <script src="lib/mouthgen.js"></script>
+ <script src="lib/runtime.js"></script>
+ <script src="lib/face-features.js"></script>
+diff --git a/lib/app.js b/lib/app.js
+index de38687..bca1d70 100644
+--- a/lib/app.js
++++ b/lib/app.js
+@@ -130,19 +130,36 @@ const VOWEL_KEYS=['a','i','u','e','o'];
+ let vowelCur={a:1,i:0,u:0,e:0,o:0},micVowel=null,micVowelAt=0,remoteVowel=null,remoteVowelAt=0,talkVowel='a';
+ function setupMouthGen(rig){if(MG)MG.attachToRig(rig,Rigger.baseName);}
+ function mgOn(e){return !!mg&&e.mouthGen>=0.5;}
++const STYLE_LABELS={auto:'おまかせ（自動判定）',measured:'計測（元の口の形から描く）'};
++function mouthStyleId(e){return MG.STYLE_IDS[clamp(Math.round(T.mouthStyle),0,MG.STYLE_IDS.length-1)]||'auto';}
++(function initStyleSelect(){
++  const sel=$('mouthStyleSel');if(!sel||!MG)return;
++  for(const id of MG.STYLE_IDS){
++    const o=document.createElement('option');o.value=id;
++    const s=window.MouthStyles&&window.MouthStyles.get(id);
++    o.textContent=STYLE_LABELS[id]||(s?s.label:id);if(s)o.title=s.note;sel.append(o);
++  }
++  sel.addEventListener('change',()=>{
++    const i=MG.STYLE_IDS.indexOf(sel.value);if(i<0)return;
++    T.mouthStyle=i;setSlider('mouthStyle',i);if(paused&&lastFrame)lastFrame.mouthStyle=i;
++    invalidate();commitHistory();syncState(true);
++    if(mg)status('口のスタイル: '+sel.options[sel.selectedIndex].textContent+(sel.value==='auto'?' → '+(STYLE_LABELS[MG.resolveStyle(mg.st,'auto')]||window.MouthStyles.get(MG.resolveStyle(mg.st,'auto')).label):''));
++  });
++})();
+ function mouthParams(e){return MG.mix(e.vw||vowelCur,e.mouthOpen,e.mouthForm);}
+ // Called once per rendered frame before deform(): updates the texture only when the shape changed.
+ function updateMouthGen(e){
+   if(!mgOn(e))return;
+   const P=mouthParams(e);mg.P=P;
+-  const st=mg.st;
++  const st=mg.st,style=mouthStyleId(e);
++  const sel=!OBS_MODE&&$('mouthStyleSel');if(sel&&sel.value!==style)sel.value=style;
+   if(st.origOpen){mg.genA=1;mg.origA=0;}
+   else{   // the drawing is a closed mouth: show it untouched while the mouth is closed
+-    const k=smooth(Math.max(P.o/0.05,Math.abs(P.s-1)/0.05,Math.abs(P.f)/0.15));
++    const k=smooth(Math.max(P.o/0.10,Math.abs(P.s-1)/0.08,Math.abs(P.f)/0.2));
+     mg.genA=k;mg.origA=1-k;
+   }
+-  const key=[P.o,P.s,P.r,P.f,P.tt].map(v=>Math.round(v*250)).join(',');
+-  if(key!==mg.key&&mg.genA>0.004){mg.key=key;MG.render(st,P,mg.img);renderer.updateTexture(mg.L,mg.img);}
++  const key=style+':'+[P.t,P.f,P.w.a,P.w.i,P.w.u,P.w.e,P.w.o].map(v=>Math.round(v*250)).join(',');
++  if(key!==mg.key&&mg.genA>0.004){mg.key=key;MG.render(st,P,mg.img,style);renderer.updateTexture(mg.L,mg.img);}
+ }
+ // Vowel weights for this frame: microphone / audio file → OBS relay → talk → sliders → あ.
+ function targetVowels(e){
+@@ -330,7 +347,7 @@ const P={angleX:0,angleY:0,angleZ:0,eyeOpenL:1,eyeOpenR:1,eyeX:0,eyeY:0,brow:0,
+   browAngL:0,browAngR:0,browAngSym:0,bangL:0,bangC:0,bangR:0,
+   armY:0,armPos:0,bust:2.5,bustY:1,irisScale:1,mouthEase:0.72,eyeEase:0.3,
+   fhAmp:2,fhSoft:0.4,eyeCY:0,eyeCAng:0,mouthCAng:0,eyeScaleL:1,eyeScaleR:1,mouthScale:1,accAmp:1,
+-  mouthGen:1,vowelA:0,vowelI:0,vowelU:0,vowelE:0,vowelO:0,jawAmp:0.55};
++  mouthGen:1,mouthStyle:0,vowelA:0,vowelI:0,vowelU:0,vowelE:0,vowelO:0,jawAmp:0.55};
+ const DEFAULTS=Object.assign({},P);
+ const T=Object.assign({},P);
+ const cur=Object.assign({},P);
+@@ -346,7 +363,7 @@ const sliders={pAngleX:'angleX',pAngleY:'angleY',pAngleZ:'angleZ',pEyeL:'eyeOpen
+   pBust:'bust',pBustY:'bustY',pIrisScale:'irisScale',pMouthEase:'mouthEase',pEyeEase:'eyeEase',
+   pFhAmp:'fhAmp',pFhSoft:'fhSoft',pEyeCY:'eyeCY',pEyeCAng:'eyeCAng',pMouthCAng:'mouthCAng',
+   pEyeScaleL:'eyeScaleL',pEyeScaleR:'eyeScaleR',pMouthScale:'mouthScale',pAccAmp:'accAmp',
+-  pMouthGen:'mouthGen',pVowelA:'vowelA',pVowelI:'vowelI',pVowelU:'vowelU',pVowelE:'vowelE',pVowelO:'vowelO',pJawAmp:'jawAmp'};
++  pMouthGen:'mouthGen',pMouthStyle:'mouthStyle',pVowelA:'vowelA',pVowelI:'vowelI',pVowelU:'vowelU',pVowelE:'vowelE',pVowelO:'vowelO',pJawAmp:'jawAmp'};
+ const sliderOf={};
+ const parameterRanges={};
+ // Attach a number box to every range row. onValue(value, final) is called on edits.
+@@ -755,7 +772,7 @@ function renderDiagnostics(rig){
+   if(layers.some(L=>L.bn==='eye_close2'))add('ok','長い閉じ目（eye_close2）');
+   eyePart('eyebrow','眉（eyebrow）',false);
+   add(real('mouth_open').length?'ok':'bad','開き口（mouth_open）',real('mouth_open').length?'':'口パクできません');
+-  if(rig.mouthGen)add('auto','自動生成口',(rig.mouthGen.origOpen?'元の口は開いた絵':'元の口は閉じた絵（閉じ口に使用）')+' · あいうえお・下あご連動');
++  if(rig.mouthGen){const pk=MG.resolveStyle(rig.mouthGen,'auto');add('auto','自動生成口',(rig.mouthGen.origOpen?'元の口は開いた絵':'元の口は閉じた絵（閉じ口に使用）')+' · おまかせ='+(STYLE_LABELS[pk]||window.MouthStyles.get(pk).label)+' · 「口」でスタイル変更可');}
+   if(real('mouth_close').length)add('ok','閉じ口（mouth_close）');else if(synth('mouth_close'))add('auto','閉じ口','汎用差分を自動配置（「口」のバーで調整可）');else add('warn','閉じ口（mouth_close）','見つかりません');
+   const strands=bn=>layers.filter(L=>L.bn===bn).reduce((s,L)=>s+(L.strands?L.strands.length:0),0);
+   const hair=['front hair','side hair','ahoge','back hair'].filter(bn=>layers.some(L=>L.bn===bn));
+diff --git a/lib/mouthgen.js b/lib/mouthgen.js
+index d0a619c..7806e5e 100644
+--- a/lib/mouthgen.js
++++ b/lib/mouthgen.js
+@@ -17,11 +17,11 @@
+  * MIT License
+  */
+ (function (root, factory) {
+-  if (typeof module === 'object' && module.exports) module.exports = factory();
+-  else root.MouthGen = factory();
+-})(typeof self !== 'undefined' ? self : this, function () {
++  if (typeof module === 'object' && module.exports) module.exports = factory(require('./mouthstyles.js'));
++  else root.MouthGen = factory(root.MouthStyles);
++})(typeof self !== 'undefined' ? self : this, function (MS) {
+   'use strict';
+-  var SS = 3;   // supersampling per axis
++  var SS = 2;   // supersampling per axis (measured style)
+ 
+   function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+   function sstep(x) { x = clamp(x, 0, 1); return x * x * (3 - 2 * x); }
+@@ -106,7 +106,13 @@
+       lc[0] += R[k] * w3; lc[1] += G[k] * w3; lc[2] += B[k] * w3; lw += w3;
+     }
+     var line = lw > 1e-6 ? [lc[0] / lw, lc[1] / lw, lc[2] / lw] : [0.3, 0.15, 0.15];
+-    var t0 = clamp(dsum / (2 * w0), Math.max(1.0, 0.055 * w0), w0 * 0.2);
++    // soft see-through ink is often too faint for a generated open mouth: keep it clearly darker than the skin
++    var darkInk = [skin[0] * 0.36, skin[1] * 0.22, skin[2] * 0.22];
++    for (var it = 0; it < 8 && lum(line[0], line[1], line[2]) > 0.5 * sl; it++)
++      line = [line[0] * 0.7 + darkInk[0] * 0.3, line[1] * 0.7 + darkInk[1] * 0.3, line[2] * 0.7 + darkInk[2] * 0.3];
++    // line weight: only clearly dark ink counts (painted lips are not line)
++    var inkN = 0; for (k = 0; k < n; k++) if (dk[k] > 0.6) inkN++;
++    var t0 = clamp(inkN / (2 * w0), Math.max(1.0, 0.04 * w0), Math.max(1.0, 0.06 * w0));
+ 
+     // upper-lip curve: per column, upper 60 % of the dark pixels → quadratic fit
+     var nb = Math.max(8, Math.floor(w0 / 2)), cu = [], cv = [];
+@@ -129,6 +135,7 @@
+     } else if (cv.length) coef = [cv[0], 0, 0];
+ 
+     // was the drawing open? interior = clearly not skin and not ink
++    var lipN = 0, lR = 0, lG = 0, lB = 0;
+     var inter = 0, solid = 0, tR = 0, tG = 0, tB = 0, tN = 0, vmin = 1e9, vmax = -1e9, Li = [];
+     var isInt = new Uint8Array(n);
+     for (k = 0; k < n; k++) {
+@@ -137,12 +144,16 @@
+       var diff = Math.abs(R[k] - skin[0]) + Math.abs(G[k] - skin[1]) + Math.abs(B[k] - skin[2]);
+       if (diff > 0.12 && Math.abs(U[k]) < w0 * 0.25) { vmin = Math.min(vmin, V[k]); vmax = Math.max(vmax, V[k]); }
+       if (dk[k] > 0.35) continue;
++      if (diff > 0.08 && L[k] < sl * 1.02 && R[k] > G[k] + 0.04) { lipN++; lR += R[k]; lG += G[k]; lB += B[k]; }
+       if (diff > 0.12 && (L[k] > sl || L[k] < sl * 0.8)) { inter++; isInt[k] = 1; Li.push(L[k]); }
+     }
+     var interFrac = inter / Math.max(1, solid), hCenter = vmax > vmin ? vmax - vmin : 0;
+     var origOpen = interFrac > 0.15 && hCenter > 2.5 * t0;
+     // An open drawing has a dark cavity that the ink estimate counts as line: keep anime line weights.
+-    if (origOpen || interFrac > 0.15) t0 = Math.min(t0, Math.max(1.0, 0.09 * w0));
++    // an open drawing: the ink estimate of the first version read well there (sample.psd); keep it
++    if (origOpen) t0 = Math.min(clamp(dsum / (2 * w0), Math.max(1.0, 0.055 * w0), w0 * 0.2), Math.max(1.0, 0.09 * w0));
++    var lipFrac = lipN / Math.max(1, solid);
++    var lip = lipN > 8 ? [lR / lipN, lG / lipN, lB / lipN] : [skin[0] * 0.95, skin[1] * 0.72, skin[2] * 0.74];
+     var teeth = [0.85 + 0.15 * skin[0], 0.85 + 0.15 * skin[1], 0.85 + 0.15 * skin[2]];
+     if (origOpen) {
+       var tl = percentile(Li, 70);
+@@ -160,7 +171,7 @@
+     if (face && face.img) faceBox = { x0: face.x, y0: face.y, x1: face.x + face.img.width, y1: face.y + face.img.height };
+     return { c: [cx, cy], th: th, e1: e1, e2: e2, w0: w0, coef: coef, t0: t0, line: line, skin: skin,
+              teeth: teeth, cavity: cavity, tongue: tongue, lipshade: lipshade, origOpen: origOpen,
+-             interFrac: interFrac, hCenter: hCenter, box: box, faceBox: faceBox };
++             interFrac: interFrac, hCenter: hCenter, box: box, faceBox: faceBox, lip: lip, lipFrac: lipFrac };
+   }
+ 
+   // ---------------------------------------------------------------- params
+@@ -186,6 +197,8 @@
+     var t = clamp(open, 0, 1), out = {};
+     for (var j = 0; j < KEYS.length; j++) out[KEYS[j]] = CLOSED[KEYS[j]] + (shape[KEYS[j]] - CLOSED[KEYS[j]]) * t;
+     out.f = clamp(out.f + (form || 0) * 0.8, -1, 1);
++    out.t = t; out.w = {};
++    for (v in VOWELS) out.w[v] = Math.max(0, w[v] || 0) / tot;
+     return out;
+   }
+   function geom(st, P) {
+@@ -201,8 +214,20 @@
+   }
+ 
+   // ---------------------------------------------------------------- render
++  /** Style ids: 'auto' (おまかせ), 'measured' (計測: drawn from the PSD's own mouth) or a MouthStyles id. */
++  var STYLE_IDS = ['auto', 'anime', 'lips', 'simple', 'deform', 'measured'];
++  function resolveStyle(st, id) {
++    if (!MS || id === 'measured') return 'measured';
++    if (!id || id === 'auto') return MS.pick(st);
++    return MS.get(id) ? id : MS.pick(st);
++  }
+   /** Draws into out = {width,height,data} (size st.box.w × st.box.h, straight alpha). */
+-  function render(st, P, out) {
++  function render(st, P, out, styleId) {
++    var sid = resolveStyle(st, styleId);
++    if (sid !== 'measured') return MS.render(st, MS.get(sid), P, out);
++    return renderMeasured(st, P, out);
++  }
++  function renderMeasured(st, P, out) {
+     var W = st.box.w, H = st.box.h, d = out.data;
+     var g = geom(st, P), Wd = g.Wd, h = g.h, t0 = st.t0, w0 = st.w0;
+     var e1 = st.e1, e2 = st.e2, cx = st.c[0], cy = st.c[1], bx = st.box.x, by = st.box.y;
+@@ -377,6 +402,6 @@
+     return st;
+   }
+ 
+-  return { analyze: analyze, attachToRig: attachToRig, render: render, blank: blank, mix: mix, jaw: jaw, geom: geom,
++  return { analyze: analyze, attachToRig: attachToRig, STYLE_IDS: STYLE_IDS, resolveStyle: resolveStyle, render: render, blank: blank, mix: mix, jaw: jaw, geom: geom,
+            vowelFromSamples: vowelFromSamples, VOWELS: VOWELS, CLOSED: CLOSED };
+ });
+diff --git a/lib/mouthstyles.js b/lib/mouthstyles.js
+new file mode 100644
+index 0000000..9999057
+--- /dev/null
++++ b/lib/mouthstyles.js
+@@ -0,0 +1,315 @@
++/*!
++ * Anime2.5DRig — mouthstyles.js
++ * Selectable vector mouth styles (口のスタイル) for the procedural mouth.
++ *
++ * Every style is a set of SVG path keyframes — 閉 / あ / い / う / え / お —
++ * in a normalised mouth space: x ∈ about [-1.3, 1.3] (1 = the drawn mouth's
++ * half width), y down, 0 = the closed lip line. All keyframes of a style use
++ * the same path commands, so a mouth between vowels is a plain weighted
++ * average of the numbers (no cross-fade, no ghosting).
++ *
++ * At draw time the shape is bent onto the measured lip curve, tilted, scaled
++ * to the character and coloured from the PSD (ink, skin, lips).
++ *
++ * Shapes per keyframe (any can be omitted by a style):
++ *   cavity  closed path, the open mouth
++ *   tongue, teethU, teethL   closed paths, clipped to the cavity
++ *   lipU, lipL               closed paths, painted lips (skin side)
++ *   lineU, lineL             open paths, stroked with a tapered pen
++ * Add your own style: push an object to STYLES with `frames` holding either
++ * shape numbers (see shapes()) or raw `d` strings with matching commands.
++ * MIT License
++ */
++(function (root, factory) {
++  if (typeof module === 'object' && module.exports) module.exports = factory();
++  else root.MouthStyles = factory();
++})(typeof self !== 'undefined' ? self : this, function () {
++  'use strict';
++  var SS = 4;   // supersampling per axis
++  function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
++  function sstep(x) { x = clamp(x, 0, 1); return x * x * (3 - 2 * x); }
++  function f3(v) { return (Math.round(v * 1000) / 1000).toString(); }
++
++  // ------------------------------------------------------------ path keyframes
++  // A keyframe is generated from a few numbers so every style shares one topology.
++  //   W half width · cy corner height · top / bot opening at the centre
++  //   k1 h1 k2 upper-edge handles · k3 h3 k4 lower-edge handles (0.552 ≈ ellipse)
++  //   tH upper-teeth band · tL lower-teeth band · gw gh tongue · lu ll lip thickness
++  var BASE = { W: 1, cy: 0, top: 0, bot: 0, k1: 0.3, h1: 0.5, k2: 0.5, k3: 0.3, h3: 0.5, k4: 0.5,
++               tH: 0, tL: 0, gw: 0.5, gh: 0, lu: 0, ll: 0 };
++  function edge(W, cy, mid, k1, h1, k2) {   // left corner → centre → right corner, two cubics
++    return [[-W, cy], [-W * (1 - k1), cy + (mid - cy) * h1], [-W * k2, mid], [0, mid],
++            [W * k2, mid], [W * (1 - k1), cy + (mid - cy) * h1], [W, cy]];
++  }
++  function P(pts) { return pts.map(function (p) { return f3(p[0]) + ' ' + f3(p[1]); }); }
++  function openD(pts) { var q = P(pts); return 'M' + q[0] + ' C' + q[1] + ' ' + q[2] + ' ' + q[3] + ' C' + q[4] + ' ' + q[5] + ' ' + q[6]; }
++  function closedD(a, b) {   // a: left→right (7 pts), b: right→left (7 pts)
++    var p = P(a), q = P(b);
++    return 'M' + p[0] + ' C' + p[1] + ' ' + p[2] + ' ' + p[3] + ' C' + p[4] + ' ' + p[5] + ' ' + p[6] +
++           ' L' + q[0] + ' C' + q[1] + ' ' + q[2] + ' ' + q[3] + ' C' + q[4] + ' ' + q[5] + ' ' + q[6] + ' Z';
++  }
++  function rev(pts) { return pts.slice().reverse(); }
++  function shift(pts, dy, prof) {   // move an edge vertically, tapering to the corners
++    return pts.map(function (p, i) { var w = prof ? prof[i] : 1; return [p[0], p[1] + dy * w]; });
++  }
++  var TAPER = [0, 0.35, 0.9, 1, 0.9, 0.35, 0];
++  function shapes(k) {
++    var f = {}; for (var key in BASE) f[key] = k[key] == null ? BASE[key] : k[key];
++    var up = edge(f.W, f.cy, f.top, f.k1, f.h1, f.k2), lo = edge(f.W, f.cy, f.bot, f.k3, f.h3, f.k4);
++    var out = {};
++    out.cavity = closedD(up, rev(lo));
++    out.lineU = openD(up);
++    out.lineL = openD(lo);
++    out.teethU = closedD(shift(up, -0.3), rev(shift(up, f.tH, [0.4, 0.7, 1, 1, 1, 0.7, 0.4])));
++    out.teethL = closedD(shift(lo, -f.tL, [0.4, 0.7, 1, 1, 1, 0.7, 0.4]), rev(shift(lo, 0.3)));
++    var cx = 0, cyT = f.bot - f.gh * 0.35, rx = f.W * f.gw, ry = Math.max(0.001, f.gh), c = 0.552;
++    out.tongue = 'M' + f3(cx - rx) + ' ' + f3(cyT) +
++      ' C' + f3(cx - rx) + ' ' + f3(cyT - ry * c) + ' ' + f3(cx - rx * c) + ' ' + f3(cyT - ry) + ' ' + f3(cx) + ' ' + f3(cyT - ry) +
++      ' C' + f3(cx + rx * c) + ' ' + f3(cyT - ry) + ' ' + f3(cx + rx) + ' ' + f3(cyT - ry * c) + ' ' + f3(cx + rx) + ' ' + f3(cyT) +
++      ' C' + f3(cx + rx) + ' ' + f3(cyT + ry * c) + ' ' + f3(cx + rx * c) + ' ' + f3(cyT + ry) + ' ' + f3(cx) + ' ' + f3(cyT + ry) +
++      ' C' + f3(cx - rx * c) + ' ' + f3(cyT + ry) + ' ' + f3(cx - rx) + ' ' + f3(cyT + ry * c) + ' ' + f3(cx - rx) + ' ' + f3(cyT) + ' Z';
++    out.lipU = closedD(shift(up, -f.lu, TAPER), rev(up));
++    out.lipL = closedD(lo, rev(shift(lo, f.ll, TAPER)));
++    return out;
++  }
++  var ELL = { k1: 0, h1: 0.552, k2: 0.552, k3: 0, h3: 0.552, k4: 0.552 };
++  function ex(a, b) { var o = {}, k; for (k in a) o[k] = a[k]; for (k in b) o[k] = b[k]; return o; }
++
++  // paint: line width (× measured ink), lower line opacity, what to draw
++  var STYLES = [
++    { id: 'anime', label: 'アニメ標準', note: '細い上唇線 + 口内・舌・上の歯。迷ったらこれ',
++      paint: { lineW: 1.0, lineL: 0.55, teeth: true, tongue: true, lips: false, outline: false, shade: true },
++      frames: {
++        closed: { W: 1.0, top: 0, bot: 0, cy: 0 },
++        a: { W: 0.92, cy: 0.06, top: -0.16, bot: 0.86, k1: 0.25, h1: 0.6, k2: 0.5, k3: 0.06, h3: 0.75, k4: 0.62, tH: 0.13, gw: 0.55, gh: 0.3 },
++        i: { W: 1.15, cy: 0.0, top: -0.08, bot: 0.3, k1: 0.35, h1: 0.5, k2: 0.55, k3: 0.3, h3: 0.6, k4: 0.6, tH: 0.15, tL: 0.1, gw: 0.4, gh: 0.04 },
++        u: ex(ELL, { W: 0.46, cy: 0.06, top: -0.1, bot: 0.36, gw: 0.5, gh: 0.1 }),
++        e: { W: 1.04, cy: 0.03, top: -0.13, bot: 0.52, k1: 0.3, h1: 0.55, k2: 0.55, k3: 0.15, h3: 0.7, k4: 0.6, tH: 0.14, tL: 0.06, gw: 0.5, gh: 0.2 },
++        o: ex(ELL, { W: 0.64, cy: 0.12, top: -0.18, bot: 0.72, k1: 0.05, k3: 0.05, tH: 0.07, gw: 0.5, gh: 0.24 })
++      } },
++    { id: 'lips', label: '唇あり（リアル寄り）', note: '色の付いた上下の唇。see-through の厚塗り・リアル系の顔に',
++      paint: { lineW: 0.7, lineL: 0, teeth: true, tongue: true, lips: true, outline: false, shade: true },
++      frames: {
++        closed: { W: 0.92, top: 0, bot: 0, cy: 0, lu: 0.12, ll: 0.2 },
++        a: { W: 0.86, cy: 0.06, top: -0.12, bot: 0.74, k1: 0.2, h1: 0.6, k2: 0.5, k3: 0.08, h3: 0.75, k4: 0.6, tH: 0.12, gw: 0.55, gh: 0.26, lu: 0.1, ll: 0.16 },
++        i: { W: 1.06, cy: 0.0, top: -0.06, bot: 0.24, k1: 0.35, h1: 0.5, k2: 0.55, k3: 0.3, h3: 0.6, k4: 0.6, tH: 0.12, tL: 0.09, gw: 0.4, gh: 0.03, lu: 0.08, ll: 0.13 },
++        u: ex(ELL, { W: 0.42, cy: 0.06, top: -0.08, bot: 0.3, gw: 0.5, gh: 0.08, lu: 0.13, ll: 0.18 }),
++        e: { W: 0.98, cy: 0.03, top: -0.1, bot: 0.44, k1: 0.3, h1: 0.55, k2: 0.55, k3: 0.15, h3: 0.7, k4: 0.6, tH: 0.12, tL: 0.05, gw: 0.5, gh: 0.18, lu: 0.09, ll: 0.15 },
++        o: ex(ELL, { W: 0.58, cy: 0.1, top: -0.15, bot: 0.6, k1: 0.05, k3: 0.05, tH: 0.06, gw: 0.5, gh: 0.2, lu: 0.12, ll: 0.17 })
++      } },
++    { id: 'simple', label: 'シンプル（ベタ塗り）', note: '口内は一色、歯・舌なし。崩れにくく、どの絵柄にも馴染む',
++      paint: { lineW: 1.0, lineL: 0, teeth: false, tongue: false, lips: false, outline: false, shade: false },
++      frames: {
++        closed: { W: 0.95, top: 0, bot: 0, cy: 0 },
++        a: { W: 0.9, cy: 0.06, top: -0.12, bot: 0.8, k1: 0.25, h1: 0.6, k2: 0.5, k3: 0.06, h3: 0.75, k4: 0.62 },
++        i: { W: 1.08, cy: 0.0, top: -0.05, bot: 0.22, k1: 0.35, h1: 0.5, k2: 0.55, k3: 0.3, h3: 0.6, k4: 0.6 },
++        u: ex(ELL, { W: 0.4, cy: 0.06, top: -0.08, bot: 0.32 }),
++        e: ex(ELL, { W: 0.9, cy: 0.05, top: -0.1, bot: 0.45, k1: 0.2, k3: 0.15 }),
++        o: ex(ELL, { W: 0.5, cy: 0.12, top: -0.18, bot: 0.7 })
++      } },
++    { id: 'deform', label: 'デフォルメ（ちびキャラ）', note: '丸い口と太めの輪郭線、大きめの舌。ちび・SD絵向け',
++      paint: { lineW: 1.5, lineL: 1, teeth: false, tongue: true, lips: false, outline: true, shade: false },
++      frames: {
++        closed: { W: 0.8, top: -0.04, bot: -0.04, cy: -0.12, k1: 0.4, h1: 0.4, k2: 0.6, k3: 0.4, h3: 0.4, k4: 0.6 },
++        a: { W: 0.86, cy: 0.04, top: -0.06, bot: 0.95, k1: 0.3, h1: 0.5, k2: 0.6, k3: 0.02, h3: 0.8, k4: 0.6, gw: 0.6, gh: 0.36 },
++        i: { W: 0.95, cy: -0.04, top: -0.04, bot: 0.34, k1: 0.3, h1: 0.5, k2: 0.55, k3: 0.25, h3: 0.7, k4: 0.6, gw: 0.45, gh: 0.08 },
++        u: ex(ELL, { W: 0.36, cy: 0.06, top: -0.06, bot: 0.38, gw: 0.55, gh: 0.12 }),
++        e: ex(ELL, { W: 0.82, cy: 0.04, top: -0.06, bot: 0.55, k1: 0.2, k3: 0.1, gw: 0.55, gh: 0.22 }),
++        o: ex(ELL, { W: 0.46, cy: 0.14, top: -0.16, bot: 0.8, gw: 0.55, gh: 0.28 })
++      } }
++  ];
++  var SHAPE_KEYS = ['cavity', 'tongue', 'teethU', 'teethL', 'lipU', 'lipL', 'lineU', 'lineL'];
++  var VKEYS = ['closed', 'a', 'i', 'u', 'e', 'o'];
++
++  // d string → {cmds, nums}; keyframes are compiled once
++  function parse(d) {
++    var cmds = [], nums = [], re = /([MCLZ])|(-?\d*\.?\d+(?:e-?\d+)?)/gi, m;
++    while ((m = re.exec(d))) { if (m[1]) cmds.push(m[1].toUpperCase()); else nums.push(parseFloat(m[2])); }
++    return { cmds: cmds.join(''), nums: nums };
++  }
++  function compile(style) {
++    if (style._c) return style._c;
++    var c = {};
++    VKEYS.forEach(function (v) {
++      var fr = style.frames[v];
++      var d = fr && fr.cavity && typeof fr.cavity === 'string' ? fr : shapes(fr || {});
++      c[v] = {};
++      SHAPE_KEYS.forEach(function (s) { if (d[s]) c[v][s] = parse(d[s]); });
++    });
++    SHAPE_KEYS.forEach(function (s) {   // every keyframe must share the commands
++      var ref = c.closed[s]; if (!ref) return;
++      VKEYS.forEach(function (v) {
++        if (!c[v][s] || c[v][s].cmds !== ref.cmds || c[v][s].nums.length !== ref.nums.length)
++          throw new Error('mouth style ' + style.id + ': ' + s + '/' + v + ' does not match the closed keyframe');
++      });
++    });
++    style._c = c;
++    return c;
++  }
++  function blend(style, P) {   // P.t open 0..1, P.w normalised vowel weights
++    var c = compile(style), out = {}, w = P.w || { a: 1 }, t = P.t == null ? P.o : P.t;
++    SHAPE_KEYS.forEach(function (s) {
++      var base = c.closed[s]; if (!base) return;
++      var n = base.nums.length, acc = new Float64Array(n), tot = 0, i;
++      ['a', 'i', 'u', 'e', 'o'].forEach(function (v) {
++        var k = w[v] || 0; if (!k) return; tot += k;
++        for (i = 0; i < n; i++) acc[i] += c[v][s].nums[i] * k;
++      });
++      var nums = new Float64Array(n);
++      for (i = 0; i < n; i++) nums[i] = base.nums[i] + ((tot ? acc[i] / tot : base.nums[i]) - base.nums[i]) * t;
++      out[s] = { cmds: base.cmds, nums: nums };
++    });
++    return out;
++  }
++  // flatten to polylines (arrays of [x,y]); closed paths keep their closing segment implicit
++  function flatten(path, map) {
++    var pts = [], k = 0, cur = null, steps = 14;
++    for (var ci = 0; ci < path.cmds.length; ci++) {
++      var c = path.cmds[ci], a = path.nums;
++      if (c === 'M' || c === 'L') { cur = [a[k], a[k + 1]]; k += 2; pts.push(map(cur[0], cur[1])); }
++      else if (c === 'C') {
++        var x1 = a[k], y1 = a[k + 1], x2 = a[k + 2], y2 = a[k + 3], x3 = a[k + 4], y3 = a[k + 5]; k += 6;
++        for (var s = 1; s <= steps; s++) {
++          var t = s / steps, u = 1 - t, b0 = u * u * u, b1 = 3 * u * u * t, b2 = 3 * u * t * t, b3 = t * t * t;
++          pts.push(map(b0 * cur[0] + b1 * x1 + b2 * x2 + b3 * x3, b0 * cur[1] + b1 * y1 + b2 * y2 + b3 * y3));
++        }
++        cur = [x3, y3];
++      }
++    }
++    return pts;
++  }
++  // nonzero scanline fill into a mask (subsample grid)
++  var BB = [0, -1];   // rows touched by the last fill
++  function fill(polys, Wd, Hd, mask) {
++    if (BB[1] >= BB[0] && mask._bb) mask.fill(0, mask._bb[0] * Wd, (mask._bb[1] + 1) * Wd); else if (!mask._bb) mask.fill(0);
++    mask._bb = [0, -1]; BB = mask._bb;
++    var ymin = Infinity, ymax = -Infinity, e = [], p, i;
++    for (p = 0; p < polys.length; p++) {
++      var pts = polys[p];
++      for (i = 0; i < pts.length; i++) {
++        var A = pts[i], B = pts[(i + 1) % pts.length];
++        if (A[1] === B[1]) continue;
++        e.push(A[0], A[1], B[0], B[1]);
++        ymin = Math.min(ymin, A[1], B[1]); ymax = Math.max(ymax, A[1], B[1]);
++      }
++    }
++    if (!e.length) return 0;
++    var y0 = Math.max(0, Math.floor(ymin)), y1 = Math.min(Hd - 1, Math.ceil(ymax)), xs = [], n = 0;
++    mask._bb[0] = y0; mask._bb[1] = y1;
++    for (var y = y0; y <= y1; y++) {
++      var sy = y + 0.5; xs.length = 0;
++      for (i = 0; i < e.length; i += 4) {
++        var ay = e[i + 1], by = e[i + 3];
++        if ((ay <= sy) !== (by <= sy)) xs.push([e[i] + (sy - ay) * (e[i + 2] - e[i]) / (by - ay), by > ay ? 1 : -1]);
++      }
++      if (xs.length < 2) continue;
++      xs.sort(function (a, b) { return a[0] - b[0]; });
++      var wnd = 0;
++      for (i = 0; i < xs.length - 1; i++) {
++        wnd += xs[i][1];
++        if (!wnd) continue;
++        var xa = Math.max(0, Math.ceil(xs[i][0] - 0.5)), xb = Math.min(Wd - 1, Math.floor(xs[i + 1][0] - 0.5));
++        for (var x = xa; x <= xb; x++) { mask[y * Wd + x] = 1; n++; }
++      }
++    }
++    return n;
++  }
++  function strokePoly(pts, wfn) {   // tapered pen → closed polygon
++    var L = [], R = [], n = pts.length;
++    if (n < 2) return [];
++    for (var i = 0; i < n; i++) {
++      var a = pts[Math.max(0, i - 1)], b = pts[Math.min(n - 1, i + 1)];
++      var dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy) || 1, w = wfn(i / (n - 1)) / 2;
++      L.push([pts[i][0] - dy / l * w, pts[i][1] + dx / l * w]); R.push([pts[i][0] + dy / l * w, pts[i][1] - dx / l * w]);
++    }
++    return L.concat(R.reverse());
++  }
++
++  // ------------------------------------------------------------ render
++  function render(st, style, P, out) {
++    var Wb = st.box.w, Hb = st.box.h, Wd = Wb * SS, Hd = Hb * SS, N = Wd * Hd;
++    var buf = render._buf && render._buf.length === N * 4 ? render._buf : (render._buf = new Float32Array(N * 4));
++    var mask = render._m && render._m.length === N ? render._m : (render._m = new Uint8Array(N));
++    var cav = render._c && render._c.length === N ? render._c : (render._c = new Uint8Array(N));
++    buf.fill(0); mask.fill(0); cav.fill(0); mask._bb = null; cav._bb = null;
++    var sh = blend(style, P), pt = style.paint, w0 = st.w0, f = P.f || 0;
++    var c0 = st.coef[0], c1 = st.coef[1], c2 = st.coef[2], e1 = st.e1, e2 = st.e2;
++    var ox = st.c[0] - st.box.x, oy = st.c[1] - st.box.y;
++    function map(x, y) {   // normalised → subsample pixels: lip curve, smile, tilt, scale
++      var u = x * w0, v = y * w0 + c0 + c1 * u + c2 * u * u - f * 0.16 * w0 * (x * x - 0.3);
++      return [(ox + u * e1[0] + v * e2[0]) * SS, (oy + u * e1[1] + v * e2[1]) * SS];
++    }
++    function paint(m, col, alpha, grad) {
++      var r0 = m._bb[0], r1 = m._bb[1], i, y, iEnd = (r1 + 1) * Wd;
++      if (r1 < r0) return;
++      for (i = r0 * Wd; i < iEnd; i++) {
++        if (!m[i]) continue;
++        var k = 1;
++        if (grad) { y = (i / Wd) | 0; k = 0.72 + 0.4 * (r1 > r0 ? (y - r0) / (r1 - r0) : 0); }
++        var q = i * 4, a = alpha;
++        buf[q] = col[0] * k * a + buf[q] * (1 - a); buf[q + 1] = col[1] * k * a + buf[q + 1] * (1 - a);
++        buf[q + 2] = col[2] * k * a + buf[q + 2] * (1 - a); buf[q + 3] = a + buf[q + 3] * (1 - a);
++      }
++    }
++    function and(m, c) { if (m._bb[1] < m._bb[0]) return; for (var i = m._bb[0] * Wd, e = (m._bb[1] + 1) * Wd; i < e; i++) m[i] &= c[i]; }
++    var t0 = st.t0 * SS * (pt.lineW || 1), openK = sstep(((sh.cavity ? 0 : 0) + (P.t == null ? P.o : P.t)) / 0.12);
++    var hasCav = sh.cavity && fill([flatten(sh.cavity, map)], Wd, Hd, cav) > 0;
++    // lips (under everything else)
++    if (pt.lips) {
++      var lipC = st.lip, lipU = [lipC[0] * 0.9, lipC[1] * 0.86, lipC[2] * 0.88];
++      if (sh.lipL && fill([flatten(sh.lipL, map)], Wd, Hd, mask)) paint(mask, lipC, 0.9, false);
++      if (sh.lipU && fill([flatten(sh.lipU, map)], Wd, Hd, mask)) paint(mask, lipU, 0.9, false);
++    }
++    if (hasCav) {
++      paint(cav, st.cavity, 1, !!pt.shade);
++      if (pt.tongue && sh.tongue && fill([flatten(sh.tongue, map)], Wd, Hd, mask)) { and(mask, cav); paint(mask, st.tongue, sstep(((P.t == null ? P.o : P.t) - 0.15) / 0.35), false); }
++      if (pt.teeth && sh.teethU && fill([flatten(sh.teethU, map)], Wd, Hd, mask)) { and(mask, cav); paint(mask, st.teeth, 1, false); }
++      if (pt.teeth && sh.teethL && fill([flatten(sh.teethL, map)], Wd, Hd, mask)) { and(mask, cav); paint(mask, [st.teeth[0] * 0.94, st.teeth[1] * 0.94, st.teeth[2] * 0.94], 1, false); }
++    }
++    var ink = st.line;
++    if (pt.outline && hasCav && sh.cavity) {
++      var ring = flatten(sh.cavity, map); ring.push(ring[0]);
++      if (fill([strokePoly(ring, function () { return t0 * 0.9 * openK; })], Wd, Hd, mask)) paint(mask, ink, 1, false);
++    }
++    if (pt.lineL && sh.lineL && openK > 0.01) {
++      var pl = flatten(sh.lineL, map);
++      if (fill([strokePoly(pl, function (s) { return t0 * 0.75 * Math.pow(Math.sin(Math.PI * s), 1.4); })], Wd, Hd, mask)) paint(mask, ink, pt.lineL * openK, false);
++    }
++    if (sh.lineU) {
++      var pu = flatten(sh.lineU, map);
++      var wU = function (s) { var e = Math.min(s, 1 - s) / 0.12; return t0 * (0.55 + 0.45 * Math.pow(1 - Math.abs(2 * s - 1), 0.5)) * sstep(e); };
++      if (fill([strokePoly(pu, wU)], Wd, Hd, mask)) paint(mask, ink, 1, false);
++    }
++    // downsample (premultiplied in buf) → straight alpha
++    var d = out.data, inv = 1 / (SS * SS);
++    for (var py = 0; py < Hb; py++) for (var px = 0; px < Wb; px++) {
++      var r = 0, g = 0, b = 0, a = 0;
++      for (var sy = 0; sy < SS; sy++) {
++        var q = ((py * SS + sy) * Wd + px * SS) * 4;
++        for (var sx = 0; sx < SS; sx++, q += 4) { r += buf[q]; g += buf[q + 1]; b += buf[q + 2]; a += buf[q + 3]; }
++      }
++      var o = (py * Wb + px) * 4;
++      if (a > 0) { d[o] = r / a * 255; d[o + 1] = g / a * 255; d[o + 2] = b / a * 255; d[o + 3] = a * inv * 255; }
++      else d[o] = d[o + 1] = d[o + 2] = d[o + 3] = 0;
++    }
++    return out;
++  }
++
++  function get(id) { for (var i = 0; i < STYLES.length; i++) if (STYLES[i].id === id) return STYLES[i]; return null; }
++  /** おまかせ: an open drawn mouth → redraw it from its own measurements ('measured'),
++   *  painted closed lips → lips, otherwise the standard anime mouth. */
++  function pick(st) { if (!st) return 'anime'; if (st.origOpen) return 'measured'; return st.lipFrac > 0.25 ? 'lips' : 'anime'; }
++  /** A keyframe as a standalone SVG (for galleries / editing in Inkscape). */
++  function toSVG(id, vowel) {
++    var s = get(id), c = compile(s)[vowel || 'a'], body = '';
++    function d(p) { var k = 0, out = ''; for (var i = 0; i < p.cmds.length; i++) { var cm = p.cmds[i], n = cm === 'C' ? 6 : cm === 'Z' ? 0 : 2; out += cm + (n ? Array.prototype.slice.call(p.nums, k, k + n).map(f3).join(' ') : '') + ' '; k += n; } return out.trim(); }
++    if (s.paint.lips) body += '<path d="' + d(c.lipL) + '" fill="#d98a8a"/><path d="' + d(c.lipU) + '" fill="#c97a7d"/>';
++    body += '<path d="' + d(c.cavity) + '" fill="#6b1f2a"/>';
++    if (s.paint.tongue) body += '<path d="' + d(c.tongue) + '" fill="#e38791" clip-path="url(#cav)"/>';
++    if (s.paint.teeth) body += '<path d="' + d(c.teethU) + '" fill="#fbf6f2" clip-path="url(#cav)"/><path d="' + d(c.teethL) + '" fill="#efe9e5" clip-path="url(#cav)"/>';
++    if (s.paint.lineL) body += '<path d="' + d(c.lineL) + '" fill="none" stroke="#4a2326" stroke-width="0.05" stroke-linecap="round" opacity="' + s.paint.lineL + '"/>';
++    body += '<path d="' + d(c.lineU) + '" fill="none" stroke="#4a2326" stroke-width="' + (0.07 * s.paint.lineW) + '" stroke-linecap="round"/>';
++    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-1.4 -0.7 2.8 1.9"><defs><clipPath id="cav"><path d="' + d(c.cavity) + '"/></clipPath></defs>' + body + '</svg>';
++  }
++  return { STYLES: STYLES, get: get, pick: pick, render: render, blend: blend, shapes: shapes, toSVG: toSVG, VOWELS: VKEYS };
++});
+diff --git a/package.json b/package.json
+index 63e5112..43050b4 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "anime25drig",
+-  "version": "2.1.0",
++  "version": "2.2.0",
+   "private": true,
+   "description": "パーツ分けPSDをドロップするだけで動く2.5Dアバターツール",
+   "license": "MIT",
+diff --git a/tests/mouthgen.test.js b/tests/mouthgen.test.js
+index 8c4230e..b01dfe1 100644
+--- a/tests/mouthgen.test.js
++++ b/tests/mouthgen.test.js
+@@ -16,25 +16,27 @@ assert.ok(st.w0>20&&st.w0<26,'half width '+st.w0);
+ assert.equal(st.origOpen,false,'a line is a closed mouth');
+ assert.ok(Math.abs(st.th)<0.1,'tilt');
+ 
+-function mask(P){const img=MG.render(st,P,MG.blank(st));const m=new Uint8Array(st.box.w*st.box.h);let n=0;for(let k=0;k<m.length;k++){m[k]=img.data[k*4+3]>90?1:0;n+=m[k];}return {m,n,img};}
++const report=[];
++for(const style of MG.STYLE_IDS){
++function mask(P){const img=MG.render(st,P,MG.blank(st),style);const m=new Uint8Array(st.box.w*st.box.h);let n=0;for(let k=0;k<m.length;k++){m[k]=img.data[k*4+3]>90?1:0;n+=m[k];}return {m,n,img};}
+ function extent(m){let x0=1e9,x1=-1,y0=1e9,y1=-1;for(let j=0;j<st.box.h;j++)for(let i=0;i<st.box.w;i++)if(m[j*st.box.w+i]){x0=Math.min(x0,i);x1=Math.max(x1,i);y0=Math.min(y0,j);y1=Math.max(y1,j);}return {w:x1-x0+1,h:y1-y0+1};}
+ function iou(a,b){let i=0,u=0;for(let k=0;k<a.length;k++){i+=a[k]&b[k];u+=a[k]|b[k];}return i/Math.max(1,u);}
+ const S={closed:mask(MG.mix({a:1},0,0))};
+ for(const v of ['a','i','u','e','o'])S[v]=mask(MG.mix({[v]:1},1,0));
+ const keys=['closed','a','i','u','o'];let worst=0,pair='';   // the five acceptance states (E sits between A and I by design)
+ for(let a=0;a<keys.length;a++)for(let b=a+1;b<keys.length;b++){const v=iou(S[keys[a]].m,S[keys[b]].m);if(v>worst){worst=v;pair=keys[a]+'/'+keys[b];}}
+-assert.ok(worst<=0.6,'shapes must be distinct (max pair IoU '+worst.toFixed(2)+' '+pair+')');
+ const eA=extent(S.a.m),eI=extent(S.i.m),eU=extent(S.u.m);
+-assert.ok(eA.h/eA.w>=0.35,'A opens wide: '+(eA.h/eA.w).toFixed(2));
+-assert.ok(eI.w/eU.w>=1.6,'I is wider than U: '+(eI.w/eU.w).toFixed(2));
+-// teeth on I: bright pixels inside
+-let bright=0;for(let k=0;k<S.i.m.length;k++)if(S.i.m[k]&&S.i.img.data[k*4]>220)bright++;
+-assert.ok(bright>10,'I shows teeth');
+-// continuity: closed→A in 30 steps without a jump
+ let prev=null,diffs=[];
+ for(let s=0;s<=30;s++){const {img}=mask(MG.mix({a:1},s/30,0));if(prev){let d=0;for(let k=0;k<img.data.length;k+=4)d+=Math.abs(img.data[k+3]-prev[k+3]);diffs.push(d);}prev=img.data.slice();}
+-const sorted=diffs.slice().sort((a,b)=>a-b),med=sorted[sorted.length>>1];
+-assert.ok(Math.max(...diffs)/Math.max(1,med)<=3,'no pop while opening');
++const sorted=diffs.slice().sort((a,b)=>a-b),med=sorted[sorted.length>>1],pop=Math.max(...diffs)/Math.max(1,med);
++report.push(style+': IoU '+worst.toFixed(2)+' A '+(eA.h/eA.w).toFixed(2)+' I/U '+(eI.w/eU.w).toFixed(2)+' pop '+pop.toFixed(2));
++assert.ok(worst<=0.6,style+': shapes must be distinct (max pair IoU '+worst.toFixed(2)+' '+pair+')');
++assert.ok(eA.h/eA.w>=0.35,style+': A opens wide: '+(eA.h/eA.w).toFixed(2));
++assert.ok(eI.w/eU.w>=1.6,style+': I is wider than U: '+(eI.w/eU.w).toFixed(2));
++assert.ok(pop<=3,style+': no pop while opening ('+pop.toFixed(2)+')');
++if(style==='anime'||style==='measured'){let bright=0;for(let k=0;k<S.i.m.length;k++)if(S.i.m[k]&&S.i.img.data[k*4]>220)bright++;assert.ok(bright>10,style+': I shows teeth');}
++}
++console.log(report.join('\n'));
+ // jaw moves the chin down on A, nothing when closed
+ const chin=[200,295];
+ assert.ok(MG.jaw(st,MG.mix({a:1},1,0),...chin)[1]>2,'jaw drops');
+@@ -79,4 +81,4 @@ if(process.env.MOUTHGEN_PSD){
+   const st2=MG.attachToRig(res.rig,R.baseName);assert.ok(st2,'real PSD mouth analysed');
+   console.log('real PSD: w0='+st2.w0.toFixed(1)+' tilt='+(st2.th*180/Math.PI).toFixed(1)+'° drawnOpen='+st2.origOpen);
+ }
+-console.log('mouthgen tests: analysis, 5 vowel shapes (max IoU '+worst.toFixed(2)+'), continuity, jaw, vowel estimate, rig hookup passed');
++console.log('mouthgen tests: analysis, '+MG.STYLE_IDS.length+' styles × 5 vowel shapes, continuity, jaw, vowel estimate, rig hookup passed');
+diff --git a/tools/mouth-styles-svg.js b/tools/mouth-styles-svg.js
+new file mode 100644
+index 0000000..7fa62ac
+--- /dev/null
++++ b/tools/mouth-styles-svg.js
+@@ -0,0 +1,14 @@
++// node tools/mouth-styles-svg.js → docs/mouth-styles/<style>.svg (all keyframes of each style side by side)
++'use strict';
++const fs=require('fs'),path=require('path'),MS=require('../lib/mouthstyles.js');
++const out=path.join(__dirname,'..','docs','mouth-styles');fs.mkdirSync(out,{recursive:true});
++const names={closed:'閉',a:'あ',i:'い',u:'う',e:'え',o:'お'};
++for(const s of MS.STYLES){
++  let body='';
++  MS.VOWELS.forEach((v,i)=>{
++    const inner=MS.toSVG(s.id,v).replace(/^<svg[^>]*>/,'').replace(/<\/svg>$/,'').replace(/id="cav"/g,'id="cav'+i+'"').replace(/url\(#cav\)/g,'url(#cav'+i+')');
++    body+='<g transform="translate('+(i*3+1.5)+',0.8)">'+inner+'</g><text x="'+(i*3+1.5)+'" y="2.3" font-size="0.35" text-anchor="middle" fill="#555">'+names[v]+'</text>';
++  });
++  fs.writeFileSync(path.join(out,s.id+'.svg'),'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 18 2.6" width="900" height="130"><rect width="18" height="2.6" fill="#f6e2d6"/>'+body+'</svg>\n');
++}
++console.log('wrote',MS.STYLES.map(s=>s.id+'.svg').join(' '));
+-- 
+2.47.3
+

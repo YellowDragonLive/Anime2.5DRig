@@ -123,6 +123,16 @@
       <div class="row"><label>開き</label><input type="range" id="pMouthOpen" min="0" max="1" step="0.01" value="0"><span class="val"></span></div>
       <div class="row"><label>形（笑い）</label><input type="range" id="pMouthForm" min="-1" max="1" step="0.01" value="0"><span class="val"></span></div>
       <div class="row"><label>閉じ口 上下</label><input type="range" id="pMouthCY" min="-1" max="1" step="0.01" value="0"><span class="val"></span></div>
+      <p class="section-hint">自動生成口：PSDに閉じ口が無いとき（see-through など）、元の口から あ・い・う・え・お の口形を自動で描きます。0 で従来の差分切り替え。</p>
+      <div class="row"><label>自動生成口</label><input type="range" id="pMouthGen" min="0" max="1" step="1" value="1"><span class="val"></span></div>
+      <label class="check-row">口のスタイル <select id="mouthStyleSel" title="合わない時は別のスタイルに切り替えてください"></select></label>
+      <div class="row" hidden><label>口のスタイル番号</label><input type="range" id="pMouthStyle" min="0" max="5" step="1" value="0"><span class="val"></span></div>
+      <div class="row"><label>母音 あ</label><input type="range" id="pVowelA" min="0" max="1" step="0.01" value="0"><span class="val"></span></div>
+      <div class="row"><label>母音 い</label><input type="range" id="pVowelI" min="0" max="1" step="0.01" value="0"><span class="val"></span></div>
+      <div class="row"><label>母音 う</label><input type="range" id="pVowelU" min="0" max="1" step="0.01" value="0"><span class="val"></span></div>
+      <div class="row"><label>母音 え</label><input type="range" id="pVowelE" min="0" max="1" step="0.01" value="0"><span class="val"></span></div>
+      <div class="row"><label>母音 お</label><input type="range" id="pVowelO" min="0" max="1" step="0.01" value="0"><span class="val"></span></div>
+      <div class="row"><label>下あごの動き</label><input type="range" id="pJawAmp" min="0" max="1.5" step="0.01" value="0.55"><span class="val"></span></div>
       <div class="row"><label>閉じやすさ</label><input type="range" id="pMouthEase" min="0" max="1" step="0.01" value="0.72"><span class="val"></span></div>
       <div class="row"><label>閉じ口 角度</label><input type="range" id="pMouthCAng" min="-1" max="1" step="0.01" value="0"><span class="val"></span></div>
       <div class="row"><label>口スケール</label><input type="range" id="pMouthScale" min="0.5" max="1.5" step="0.01" value="1"><span class="val"></span></div>
@@ -171,6 +181,11 @@
       <div class="row"><label>なめらかさ</label><input type="range" id="prefSmoothing" min="0" max="1" step="0.01"><span class="val"></span></div>
       <div class="row"><label>マイク感度</label><input type="range" id="prefMicGain" min="0.25" max="4" step="0.01"><span class="val"></span></div>
       <div class="row"><label>ノイズゲート</label><input type="range" id="prefMicGate" min="0" max="0.5" step="0.01"><span class="val"></span></div>
+      <div class="btns">
+        <button class="btn" type="button" id="btnAudioLip" title="歌のボーカル（人声分離したもの推奨）を再生しながら、母音を推定して口を動かします">音声ファイルで口パク（歌）</button>
+        <input type="file" id="audioLipFile" accept="audio/*" hidden>
+      </div>
+      <div class="row"><label>声の高さ補正</label><input type="range" id="prefFormantScale" min="0.8" max="1.25" step="0.01"><span class="val"></span></div>
       <div class="meter" id="micMeter" title="マイク入力（線はノイズゲート）"><span class="meter-level"></span><span class="meter-gate"></span></div>
     </section>
     <section class="sec" data-sec="obs"><h2>OBS連携</h2>
@@ -225,6 +240,8 @@
 <script src="lib/ag-psd.min.js"></script>
 <script src="lib/rigger.js"></script>
 <script src="lib/genericparts.js"></script>
+<script src="lib/mouthstyles.js"></script>
+<script src="lib/mouthgen.js"></script>
 <script src="lib/runtime.js"></script>
 <script src="lib/face-features.js"></script>
 <script src="lib/renderer.js"></script>
