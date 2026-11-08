@@ -93,6 +93,23 @@ for (const s of COMPOSED) {
 }
 check('日文模式下原样返回', loadI18N('?lang=ja').t('PSDを開く') === 'PSDを開く');
 
+// ---- 2b. layer-order warnings ----
+// These list role labels inside （…）. Single-kanji labels (脚 / 靴 / 首) are
+// deliberately kept out of the fragment table — replacing one character
+// anywhere in a sentence is unsafe — so they are resolved token by token.
+// A kana check alone cannot catch them (they would stay as kanji), hence the
+// exact expected strings.
+const ORDER = [
+  ['服の重なり順を自動補正しました（脚、靴、後髪）', '已自动修正服装图层顺序（腿、鞋子、后发）'],
+  ['服の重なり順を自動補正しました（首、首元）', '已自动修正服装图层顺序（脖子、颈部饰品）'],
+  ['服の重なり順を自動補正しました（翼、尻尾）', '已自动修正服装图层顺序（翅膀、尾巴）'],
+  ['服の重なり順を自動補正しました（上半身の服、下半身の服、脚、靴）', '已自动修正服装图层顺序（上装、下装、腿、鞋子）'],
+  ['顔パーツの重なり順を自動補正しました（顔、眉）', '已自动修正五官图层顺序（脸、眉毛）']
+];
+for (const [ja, want] of ORDER) {
+  check('顺序警告已翻译: ' + ja.slice(0, 18), zh.t(ja) === want, zh.t(ja));
+}
+
 // ---- 3. dictionary hygiene ----
 const src = fs.readFileSync(path.join(ROOT, 'lib/i18n.js'), 'utf8');
 const dictBody = src.slice(src.indexOf('var ZH = {'), src.indexOf('/* Fragment dictionary'));
@@ -115,4 +132,4 @@ if (failures) {
   console.log('i18n tests: ' + failures + ' failure(s)');
   process.exit(1);
 }
-console.log('i18n tests: 默认中文, 17 组拼接串, 字典洁净度, 加载顺序 passed');
+console.log('i18n tests: 默认中文, ' + COMPOSED.length + ' 组拼接串, ' + ORDER.length + ' 组顺序警告, 字典洁净度, 加载顺序 passed');

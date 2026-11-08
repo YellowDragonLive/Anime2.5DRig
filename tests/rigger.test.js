@@ -171,3 +171,37 @@ console.log('rigger tests: 20 scenarios passed');
   assert.ok(moved.every(l => !l.fade), 'split brow does not fade on blink');
 }
 console.log('rigger: face order / eyewhite-less eyes / brow-in-lash passed');
+
+// ---- garment stacking order (skirt emitted above the jacket / legs above the skirt) ----
+{
+  const names = rig => rig.layers.map(l => l.name);
+  const idx = (rig, n) => names(rig).indexOf(n);
+  const face = solidLayer('face', 100, 20, 100, 100);
+  const top = solidLayer('topwear', 95, 120, 110, 90);            // y 120..210
+  const skirt = solidLayer('bottomwear', 90, 185, 120, 70);       // y 185..255, overlaps the torso hem
+  const legs = solidLayer('legwear', 105, 240, 90, 50);           // y 240..290, overlaps the skirt
+  const rig = children => Rigger.buildRig({ width: 300, height: 300, children });
+
+  // skirt painted after the jacket: its waistband eats the jacket hem
+  const skirtOnTop = rig([face, legs, top, skirt]);
+  assert.ok(idx(skirtOnTop, 'bottomwear') < idx(skirtOnTop, 'topwear'), 'skirt goes back under the jacket');
+  assert.ok(idx(skirtOnTop, 'legwear') < idx(skirtOnTop, 'bottomwear'), 'skirt stays over the legs');
+  assert.ok(skirtOnTop.warnings.some(w => /服の重なり順/.test(w)), 'garment reordering is reported');
+
+  // legs painted after the skirt: the thighs print over it
+  const legsOnTop = rig([face, top, skirt, legs]);
+  assert.ok(idx(legsOnTop, 'legwear') < idx(legsOnTop, 'bottomwear'), 'legs are dropped under the skirt');
+  assert.ok(legsOnTop.warnings.some(w => /服の重なり順/.test(w)), 'leg reordering is reported');
+
+  // arms keep the painter's order: those layers carry the inpainted backfill of
+  // whatever they cover, so lifting them would stamp that fill on the clothes
+  const armsOnTop = rig([face, legs, skirt, top, solidLayer('handwear', 70, 150, 160, 130)]);
+  assert.ok(idx(armsOnTop, 'handwear') > idx(armsOnTop, 'topwear'), 'handwear is left where the artist put it');
+  assert.ok(!armsOnTop.warnings.some(w => /服の重なり順/.test(w)), 'no garment warning when only arms are above');
+
+  // an already correct stack is not touched
+  const ok = rig([face, legs, skirt, top, solidLayer('neckwear', 120, 110, 60, 20)]);
+  assert.ok(!ok.warnings.some(w => /服の重なり順/.test(w)), 'correct garment order → no reorder');
+  assert.ok(idx(ok, 'neckwear') > idx(ok, 'topwear'), 'collar stays over the jacket');
+}
+console.log('rigger: garment order (skirt/jacket, legs/skirt, arms untouched) passed');
